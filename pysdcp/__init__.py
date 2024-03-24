@@ -140,18 +140,26 @@ class Projector:
             raise Exception("Timeout while trying to send command {}".format(command)) from e
 
         if len(my_buf) != sent:
-            raise ConnectionError(
-                "Failed sending entire buffer to projector. Sent {} out of {} !".format(sent, len(my_buf)))
-        response_buf = sock.recv(1024)
-        sock.close()
+           raise ConnectionError(
+              "Failed sending entire buffer to projector. Sent {} out of {} !".format(sent, len(my_buf)))
 
-        _, is_success, _, data = process_command_response(response_buf)
+        #Check if command is an simulated ir command without a response from the projector and always return true to avoid a timeout
+        if data is None and str(hex(command)).startswith(("0x17", "0x19", "0x1B")):
+            sock.close()
 
-        if not is_success:
-            raise Exception(
-                "Received failed status from projector while sending command 0x{:x}. Error 0x{:x}".format(command,
-                                                                                                          data))
-        return data
+            return True
+        else:
+            response_buf = sock.recv(1024)
+
+            sock.close()
+
+            _, is_success, _, data = process_command_response(response_buf)
+
+            if not is_success:
+                raise Exception(
+                "Received failed status from projector while sending command 0x{:x}. Error 0x{:x}".format(command, data))
+            
+            return data
 
     def find_projector(self, udp_ip: str = None, udp_port: int = None, timeout=None):
 
@@ -182,6 +190,13 @@ class Projector:
         self._send_command(action=ACTIONS["SET"], command=COMMANDS["INPUT"],
                            data=INPUTS["HDMI1"] if hdmi_num == 1 else INPUTS["HDMI2"])
         return True
+    
+    def get_input(self):
+        data = self._send_command(action=ACTIONS["GET"], command=COMMANDS["INPUT"])
+        if data == INPUTS["HDMI1"]:
+            return "HDMI 1"
+        elif data == INPUTS["HDMI2"]:
+            return "HDMI 2"
 
     def set_screen(self, command: str, value: str):
         valid_values = self.SCREEN_SETTINGS.get(command)
@@ -201,6 +216,28 @@ class Projector:
             return False
         else:
             return True
+        
+    def get_muting(self):
+        data = self._send_command(action=ACTIONS["GET"], command=COMMANDS["PICTURE_MUTING"])
+        if data == PICTURE_MUTING["OFF"]:
+            return False
+        else:
+            return True
+        
+    def set_muting(self, on=True):
+        self._send_command(action=ACTIONS["SET"], command=COMMANDS["PICTURE_MUTING"],
+                           data=PICTURE_MUTING["ON"] if on else PICTURE_MUTING["OFF"])
+        return True
+    
+    def set_aspect(self, aspect):
+        self._send_command(action=ACTIONS["SET"], command=COMMANDS["ASPECT_RATIO"],
+                           data=ASPECT_RATIOS[aspect])
+        return True
+    
+    def set_preset(self, preset):
+        self._send_command(action=ACTIONS["SET"], command=COMMANDS["CALIBRATION_PRESET"],
+                           data=CALIBRATION_PRESETS[preset])
+        return True
 
 
 if __name__ == '__main__':

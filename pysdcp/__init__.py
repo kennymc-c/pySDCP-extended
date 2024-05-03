@@ -156,8 +156,13 @@ class Projector:
             _, is_success, _, data = process_command_response(response_buf)
 
             if not is_success:
-                raise Exception(
-                "Received failed status from projector while sending command 0x{:x}. Error 0x{:x}".format(command, data))
+                command = "{:x}".format(command)
+                try:
+                    error_msg = RESPONSE_ERRORS[data]
+                except KeyError:
+                    error_code = "{:x}".format(data)
+                    error_msg = "Unknown error code: " + error_code
+                raise Exception("Received failed status from projector while sending command 0x" + command + ". " + error_msg)
             
             return data
 
@@ -181,8 +186,10 @@ class Projector:
         self.ip = addr[0]
         self.is_init = True
 
-    def get_serial(self, udp_ip: str = None, udp_port: int = None, timeout=None):
-
+    def get_pjinfo(self, udp_ip: str = None, udp_port: int = None, timeout=None):
+        '''
+        Returns ip, serial and model name from projector via SDAP advertisement service as a dictionary. Can take up to 30 seconds.
+        '''
         self.UDP_PORT = udp_port if udp_port is not None else self.UDP_PORT
         self.UDP_IP = udp_ip if udp_ip is not None else self.UDP_IP
         timeout = timeout if timeout is not None else self.UDP_TIMEOUT
@@ -194,32 +201,16 @@ class Projector:
         sock.settimeout(timeout)
         try:
             SDAP_buffer, addr = sock.recvfrom(1028)
-        except socket.timeout as e:
-            return False
+        except socket.timeout:
+            raise Exception("Timeout while waiting for data from projector")
         
         serial = unpack('>I', SDAP_buffer[20:24])[0]
-
-        return serial
-    
-    def get_model(self, udp_ip: str = None, udp_port: int = None, timeout=None):
-
-        self.UDP_PORT = udp_port if udp_port is not None else self.UDP_PORT
-        self.UDP_IP = udp_ip if udp_ip is not None else self.UDP_IP
-        timeout = timeout if timeout is not None else self.UDP_TIMEOUT
-
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-
-        sock.bind((self.UDP_IP, self.UDP_PORT))
-
-        sock.settimeout(timeout)
-        try:
-            SDAP_buffer, addr = sock.recvfrom(1028)
-        except socket.timeout as e:
-            return False
-        
         model = decode_text_field(SDAP_buffer[8:20])
+        ip = addr[0]
 
-        return model
+        result = {"model":model, "serial":serial, "ip":ip}
+
+        return result
 
     def set_power(self, on=True):
         self._send_command(action=ACTIONS["SET"], command=COMMANDS["SET_POWER"],
@@ -267,16 +258,6 @@ class Projector:
     def set_muting(self, on=True):
         self._send_command(action=ACTIONS["SET"], command=COMMANDS["PICTURE_MUTING"],
                            data=PICTURE_MUTING["ON"] if on else PICTURE_MUTING["OFF"])
-        return True
-    
-    def set_aspect(self, aspect):
-        self._send_command(action=ACTIONS["SET"], command=COMMANDS["ASPECT_RATIO"],
-                           data=ASPECT_RATIOS[aspect])
-        return True
-    
-    def set_preset(self, preset):
-        self._send_command(action=ACTIONS["SET"], command=COMMANDS["CALIBRATION_PRESET"],
-                           data=CALIBRATION_PRESETS[preset])
         return True
 
 

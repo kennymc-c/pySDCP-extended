@@ -37,16 +37,14 @@ COMMANDS = {
     "ASPECT_RATIO": 0x0020,
     "HDMI1_DYNAMIC_RANGE": 0x006E,
     "HDMI2_DYNAMIC_RANGE": 0x006F,
-    "2D_3D_SELECT": 0x0060,
-    "3D_FORMAT": 0x0060,
+    "2D_3D_DISPLAY_SELECT": 0x0060,
+    "3D_FORMAT": 0x0061,
     "INPUT": 0x0001,
     "PICTURE_MUTING": 0x0030,
+    "MENU_POSITION": 0x00A6,
     "GET_STATUS_ERROR": 0x0101,
     "GET_STATUS_POWER": 0x0102,
     "GET_STATUS_LAMP_TIMER": 0x0113,
-    "STATUS": 0x00A4,
-    "MENU_POSITION": 0x00A6,
-    "TEST_PATTERN": 0x00AB,
 }
 
 #Data
@@ -74,7 +72,7 @@ MOTIONFLOW = {
     "SMOTH_LOW": 0x0002,
     "IMPULSE": 0x0003,
     "COMBINATION": 0x0004,
-    "TRUE_CINEMA": 0x0004
+    "TRUE_CINEMA": 0x0005
 }
 
 HDR = {
@@ -133,19 +131,9 @@ PICTURE_MUTING = {
     "ON": 0x0001,
 }
 
-STATUS = {
-    "OFF": 0x0000,
-    "ON": 0x0001,
-}
-
 MENU_POSITIONS= {
     "BOTTOM_LEFT": 0x0000,
     "CENTER": 0x0001,
-}
-
-TEST_PATTERN= {
-    "OFF": 0x0000,
-    "ON": 0x0001,
 }
 
 #Response data
@@ -168,4 +156,29 @@ POWER_STATUS = {
     "POWER_ON": 3,
     "COOLING": 4,
     "COOLING2": 5
+}
+
+RESPONSE_ERRORS = {
+    0x101: "Item Error: Invalid Item",
+    0x102: "Item Error: Invalid Item Request",
+    0x103: "Item Error: Invalid Length",
+    0x104: "Item Error: Invalid Data",
+    0x111: "Item Error: Short Data",
+    0x180: "Item Error: Not Applicable Item",
+    0x201: "Community Error: Different Community",
+    0x1001: "Request Error: Invalid Version",
+    0x1002: "Request Error: Invalid Category",
+    0x1003: "Request Error: Invalid Request",
+    0x1011: "Request Error: Short Header",
+    0x1012: "Request Error: Short Community",
+    0x1013: "Request Error: Short Command",
+    0xF001: "Comm Error: Timeout",
+    0xF010: "Comm Error: Check Sum Error",
+    0xF020: "Comm Error: Framing Error",
+    0xF030: "Comm Error: Parity Error",
+    0xF040: "Comm Error: Over Run Error",
+    0xF050: "Comm Error: Other Comm Error",
+    0xF0F0: "Comm Error: Unknown Response",
+    0xF110: "NVRAM Error: Read Error",
+    0xF120: "NVRAM Error: Write Error",
 }

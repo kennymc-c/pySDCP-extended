@@ -140,18 +140,31 @@ class Projector:
             raise Exception("Timeout while trying to send command {}".format(command)) from e
 
         if len(my_buf) != sent:
-            raise ConnectionError(
-                "Failed sending entire buffer to projector. Sent {} out of {} !".format(sent, len(my_buf)))
-        response_buf = sock.recv(1024)
-        sock.close()
+           raise ConnectionError(
+              "Failed sending entire buffer to projector. Sent {} out of {} !".format(sent, len(my_buf)))
 
-        _, is_success, _, data = process_command_response(response_buf)
+        #Check if command is an simulated ir command without a response from the projector and always return true to avoid a timeout
+        if data is None and str(hex(command)).startswith(("0x17", "0x19", "0x1B")):
+            sock.close()
 
-        if not is_success:
-            raise Exception(
-                "Received failed status from projector while sending command 0x{:x}. Error 0x{:x}".format(command,
-                                                                                                          data))
-        return data
+            return True
+        else:
+            response_buf = sock.recv(1024)
+
+            sock.close()
+
+            _, is_success, _, data = process_command_response(response_buf)
+
+            if not is_success:
+                command = "{:x}".format(command)
+                try:
+                    error_msg = RESPONSE_ERRORS[data]
+                except KeyError:
+                    error_code = "{:x}".format(data)
+                    error_msg = "Unknown error code: " + error_code
+                raise Exception("Received failed status from projector while sending command 0x" + command + ". " + error_msg)
+            
+            return data
 
     def find_projector(self, udp_ip: str = None, udp_port: int = None, timeout=None):
 
@@ -173,6 +186,32 @@ class Projector:
         self.ip = addr[0]
         self.is_init = True
 
+    def get_pjinfo(self, udp_ip: str = None, udp_port: int = None, timeout=None):
+        '''
+        Returns ip, serial and model name from projector via SDAP advertisement service as a dictionary. Can take up to 30 seconds.
+        '''
+        self.UDP_PORT = udp_port if udp_port is not None else self.UDP_PORT
+        self.UDP_IP = udp_ip if udp_ip is not None else self.UDP_IP
+        timeout = timeout if timeout is not None else self.UDP_TIMEOUT
+
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+        sock.bind((self.UDP_IP, self.UDP_PORT))
+
+        sock.settimeout(timeout)
+        try:
+            SDAP_buffer, addr = sock.recvfrom(1028)
+        except socket.timeout:
+            raise Exception("Timeout while waiting for data from projector")
+        
+        serial = unpack('>I', SDAP_buffer[20:24])[0]
+        model = decode_text_field(SDAP_buffer[8:20])
+        ip = addr[0]
+
+        result = {"model":model, "serial":serial, "ip":ip}
+
+        return result
+
     def set_power(self, on=True):
         self._send_command(action=ACTIONS["SET"], command=COMMANDS["SET_POWER"],
                            data=POWER_STATUS["START_UP"] if on else POWER_STATUS["STANDBY"])
@@ -182,6 +221,13 @@ class Projector:
         self._send_command(action=ACTIONS["SET"], command=COMMANDS["INPUT"],
                            data=INPUTS["HDMI1"] if hdmi_num == 1 else INPUTS["HDMI2"])
         return True
+    
+    def get_input(self):
+        data = self._send_command(action=ACTIONS["GET"], command=COMMANDS["INPUT"])
+        if data == INPUTS["HDMI1"]:
+            return "HDMI 1"
+        elif data == INPUTS["HDMI2"]:
+            return "HDMI 2"
 
     def set_screen(self, command: str, value: str):
         valid_values = self.SCREEN_SETTINGS.get(command)
@@ -201,6 +247,23 @@ class Projector:
             return False
         else:
             return True
+        
+    def get_muting(self):
+        data = self._send_command(action=ACTIONS["GET"], command=COMMANDS["PICTURE_MUTING"])
+        if data == PICTURE_MUTING["OFF"]:
+            return False
+        else:
+            return True
+        
+    def set_muting(self, on=True):
+        self._send_command(action=ACTIONS["SET"], command=COMMANDS["PICTURE_MUTING"],
+                           data=PICTURE_MUTING["ON"] if on else PICTURE_MUTING["OFF"])
+        return True
+    
+    def get_lamp_hours(self):
+        data = self._send_command(action=ACTIONS["GET"], command=COMMANDS["GET_STATUS_LAMP_TIMER"])
+        hours = "{:d}".format(data)
+        return hours
 
 
 if __name__ == '__main__':

@@ -6,6 +6,7 @@ Python **3** library to query and control Sony Projectors using SDCP (PJ Talk) p
 ##Features:
 * Autodiscover projector using SDAP (Simple Display Advertisement Protocol)
 * Query and change power, input and picture muting status
+* Query lamp hours
 * Toggle input between HDMI-1 and HDMI-2
 * Set aspect ratio/zoom and calibration presets
 

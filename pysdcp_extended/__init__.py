@@ -4,7 +4,7 @@ import socket
 from collections import namedtuple
 from struct import *
 
-from pysdcp.protocol import *
+from pysdcp_extended.protocol import *
 
 Header = namedtuple("Header", ['version', 'category', 'community'])
 ProjInfo = namedtuple("ProjInfo", ['id', 'product_name', 'serial_number', 'power_state', 'location'])
@@ -163,7 +163,7 @@ class Projector:
                     error_code = "{:x}".format(data)
                     error_msg = "Unknown error code: " + error_code
                 raise Exception("Received failed status from projector while sending command 0x" + command + ". " + error_msg)
-            
+
             return data
 
     def find_projector(self, udp_ip: str = None, udp_port: int = None, timeout=None):
@@ -203,7 +203,7 @@ class Projector:
             SDAP_buffer, addr = sock.recvfrom(1028)
         except socket.timeout:
             raise Exception("Timeout while waiting for data from projector")
-        
+
         serial = unpack('>I', SDAP_buffer[20:24])[0]
         model = decode_text_field(SDAP_buffer[8:20])
         ip = addr[0]
@@ -221,7 +221,7 @@ class Projector:
         self._send_command(action=ACTIONS["SET"], command=COMMANDS["INPUT"],
                            data=INPUTS["HDMI1"] if hdmi_num == 1 else INPUTS["HDMI2"])
         return True
-    
+
     def get_input(self):
         data = self._send_command(action=ACTIONS["GET"], command=COMMANDS["INPUT"])
         if data == INPUTS["HDMI1"]:
@@ -247,19 +247,19 @@ class Projector:
             return False
         else:
             return True
-        
+
     def get_muting(self):
         data = self._send_command(action=ACTIONS["GET"], command=COMMANDS["PICTURE_MUTING"])
         if data == PICTURE_MUTING["OFF"]:
             return False
         else:
             return True
-        
+
     def set_muting(self, on=True):
         self._send_command(action=ACTIONS["SET"], command=COMMANDS["PICTURE_MUTING"],
                            data=PICTURE_MUTING["ON"] if on else PICTURE_MUTING["OFF"])
         return True
-    
+
     def get_lamp_hours(self):
         data = self._send_command(action=ACTIONS["GET"], command=COMMANDS["GET_STATUS_LAMP_TIMER"])
         hours = "{:d}".format(data)

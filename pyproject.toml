@@ -1,0 +1,27 @@
+[pysdpc-extended]
+name = "pysdcp-extended"
+version = "0.1.0"
+description = "SDCP / PJ Talk library to control Sony projectors"
+license = "MIT"
+authors = [
+    "kennymc.c"
+]
+repository = "https://github.com/kennymc-c/pySDCP-extended"
+readme = ["README.md"]
+keywords = ["sdcp", "pjtalk", "sony", "projector", "ip-control", "home", "automation"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Topic :: Software Development :: Libraries",
+    "Topic :: Home Automation",
+    "Programming Language :: Python :: 3.6",
+]
+# Need as the package name contains a hyphen
+packages = [
+    { include = "pysdcp_extended" },
+]
+
+[pysdpc-extended.dependencies]
+# Compatible Python versions
+python = ">=3.6"

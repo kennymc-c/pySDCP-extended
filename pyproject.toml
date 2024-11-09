@@ -1,4 +1,4 @@
-[pysdpc-extended]
+[tool.poetry]
 name = "pysdcp-extended"
 version = "0.0.1-rc1"
 description = "SDCP / PJ Talk library to control Sony projectors"
@@ -22,6 +22,9 @@ packages = [
     { include = "pysdcp_extended" },
 ]
 
-[pysdpc-extended.dependencies]
-# Compatible Python versions
-python = ">=3.11"
+[tool.poetry.dependencies] 
+python = ">= 3.11"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"

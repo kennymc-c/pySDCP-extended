@@ -1,14 +1,12 @@
 [tool.poetry]
 name = "pysdcp-extended"
-version = "0.0.1-rc3"
+version = "0.0.2"
 description = "SDCP / PJ Talk library to control Sony projectors"
+authors = ["kennymc.c"]
 license = "MIT"
-authors = [
-    "kennymc.c"
-]
+readme = "README.md"
 repository = "https://github.com/kennymc-c/pySDCP-extended"
-readme = ["README.md"]
-keywords = ["sdcp", "pjtalk", "sony", "projector", "ip-control", "home", "automation"]
+keywords = ["sdcp", "pjtalk", "sony", "projector", "ip-control", "home-automation"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -22,9 +20,10 @@ packages = [
     { include = "pysdcp_extended" },
 ]
 
-[tool.poetry.dependencies] 
-python = ">= 3.11"
+[tool.poetry.dependencies]
+python = "3.11.10"
+
 
 [build-system]
-requires = ["poetry-core>=1.0.0"]
+requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"

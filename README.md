@@ -20,6 +20,7 @@ Python **3** library to query and control Sony Projectors using SDCP (PJ Talk) p
 
 The SDCP protocol allow to control practically everything in projector, i.e. resolution, brightness, 3d format...
 If you need to use more commands, just add to _protocol.py_, and send with _my_projector._send_command__
+
 Please note that commands in `COMMANDS_IR` work as fire and forget and you only get a response if there is a timeout.
 
 ## Protocol Documentation

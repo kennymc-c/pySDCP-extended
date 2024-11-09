@@ -1,6 +1,6 @@
 [pysdpc-extended]
 name = "pysdcp-extended"
-version = "0.1.0"
+version = "0.0.1-rc1"
 description = "SDCP / PJ Talk library to control Sony projectors"
 license = "MIT"
 authors = [

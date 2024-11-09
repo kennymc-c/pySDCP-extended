@@ -15,7 +15,7 @@ classifiers = [
     "Operating System :: OS Independent",
     "Topic :: Software Development :: Libraries",
     "Topic :: Home Automation",
-    "Programming Language :: Python :: 3.6",
+    "Programming Language :: Python :: 3.11",
 ]
 # Need as the package name contains a hyphen
 packages = [
@@ -24,4 +24,4 @@ packages = [
 
 [pysdpc-extended.dependencies]
 # Compatible Python versions
-python = ">=3.6"
+python = ">=3.11"

@@ -104,8 +104,8 @@ jobs:
     name: Upload release to PyPI
     needs: [setup_and_build, details]
     runs-on: ubuntu-latest
-    # environment:
-    #   name: "publish"
+    environment:
+      name: "publish"
     permissions:
       id-token: write
     steps:
@@ -120,3 +120,4 @@ jobs:
         with:
           repository-url: https://test.pypi.org/legacy/
           verbose: true
+          attestations: false

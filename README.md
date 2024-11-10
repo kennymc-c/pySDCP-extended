@@ -77,7 +77,7 @@ If you need to use more commands, just add to _protocol.py_, and send it like th
 ```python
 from pysdcp_extended.protocol.py import *
 
-my_projector._send_command(action=ACTIONS["SET"], command=COMMANDS_IR["CURSOR_UP])
+my_projector._send_command(action=ACTIONS["SET"], command=COMMANDS_IR["CURSOR_UP"])
 ```
 
 Please note that commands in `COMMANDS_IR` work as fire and forget and you only get a response if there is a timeout.

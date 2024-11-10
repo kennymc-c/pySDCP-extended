@@ -1,27 +1,24 @@
 # pySDCP-extended
 
-[![PyPi](https://img.shields.io/pypi/v/pysdcp-extended.svg)](https://pypi.org/project/pysdcp-extended)
+<!---[![PyPi](https://img.shields.io/pypi/v/pysdcp-extended.svg)](https://pypi.org/project/pysdcp-extended)--->
 
-Sony SDCP / PJ Talk projector control.
+Extended Sony SDCP / PJ Talk projector control.
 
 Python **3** library to query and control Sony Projectors using SDCP (PJ Talk) protocol over IP.
 
 ## Features
 
 * Auto discover projector using SDAP (Simple Display Advertisement Protocol)
-* Query model name and serial number
-* Query and change power, input and picture muting status
-* Query lamp hours
-* Change input to HDMI 1 and HDMI 2
+* Query and change power & input (HDMI 1 + 2)
 * Set aspect ratio/zoom and calibration presets
+
+### Extended Features
+
+* Support for more commands (added to protocol.py)
+* Query and set picture muting
+* Query lamp hours
+* Query model name and serial number
 * Show response error message from the projector
-
-### More features
-
-The SDCP protocol allow to control practically everything in projector, i.e. resolution, brightness, 3d format...
-If you need to use more commands, just add to _protocol.py_, and send with _my_projector._send_command__
-
-Please note that commands in `COMMANDS_IR` work as fire and forget and you only get a response if there is a timeout.
 
 ## Protocol Documentation
 
@@ -48,16 +45,18 @@ Supported Sony projectors should include:
 
 ## Installation
 
-```pip install pysdcp-extended```
+_Currently only available on Test PyPi_
+
+```pip install --index-url https://test.pypi.org/simple/ pysdcp-extended```
 
 ## Examples
 
 Sending any command will initiate auto discovery of the projector if none is known and will carry on the command. So just go for it and maybe you get lucky
 
 ```python
-import pysdcp_extended as pysdcp
+import pysdcp_extended
 
-my_projector = pysdcp.Projector()
+my_projector = pysdcp_extended.Projector()
 
 my_projector.get_power()
 my_projector.set_power(True)
@@ -69,6 +68,19 @@ Skip discovery to save time or if you know the IP of the projector
 my_known_projector = pysdcp.Projector('10.1.2.3')
 my_known_projector.set_HDMI_input(2)
 ```
+
+### Commands from protocol.py
+
+While you can use the build in functions like get_power() or set_HDMI_input() you can also directly send any command from protocol.py like this
+If you need to use more commands, just add to _protocol.py_, and send it like this:
+
+```python
+from pysdcp_extended.protocol.py import *
+
+my_projector._send_command(action=ACTIONS["SET"], command=COMMANDS_IR["CURSOR_UP])
+```
+
+Please note that commands in `COMMANDS_IR` work as fire and forget and you only get a response if there is a timeout.
 
 ## Credits
 

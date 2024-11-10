@@ -1,7 +1,7 @@
 [tool.poetry]
 name = "pysdcp-extended"
-version = "0.0.4"
-description = "SDCP / PJ Talk library to control Sony projectors"
+version = "0.0.5"
+description = "Extended SDCP / PJ Talk library to control Sony projectors"
 authors = ["kennymc.c"]
 license = "MIT"
 readme = "README.md"

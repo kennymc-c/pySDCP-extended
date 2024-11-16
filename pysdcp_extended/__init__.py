@@ -80,13 +80,16 @@ def decode_text_field(buf):
 
 
 class Projector:
-    def __init__(self, ip: str = None):
+    def __init__(self, ip: str = None, community: str = "SONY", udp_port: int = 53862, tcp_port: int = 53484):
         """
         Base class for projector communication. 
         Enables communication with Projector, Sending commands and Querying Power State
          
-        :param ip: str, IP address for projector. if given, will create a projector with default values to communicate
+        :param ip: str, IP address for projector. If given, will create a projector with default values to communicate
             with projector on the given ip.  i.e. "10.0.0.5"
+        :param community: str, PJ Talk Community for the projector. If not given "SONY" will be used
+        :param udp_port: int, SDAP Advertisement UDP port. If not given 53862 will be used
+        :param tcp_port: int, PJ Talk/SDCP TCP port. If not given 53484 will be used
         """
         self.info = ProjInfo(
             product_name=None,
@@ -103,13 +106,13 @@ class Projector:
             # Create projector from known ip
             # Set default values to enable immediately communication with known project (ip)
             self.ip = ip
-            self.header = Header(category=10, version=2, community="SONY")
+            self.header = Header(category=10, version=2, community=community)
             self.is_init = True
 
         # Default ports
         self.UDP_IP = ""
-        self.UDP_PORT = 53862
-        self.TCP_PORT = 53484
+        self.UDP_PORT = udp_port
+        self.TCP_PORT = tcp_port
         self.TCP_TIMEOUT = 2
         self.UDP_TIMEOUT = 31
 
@@ -140,7 +143,7 @@ class Projector:
             raise Exception("Timeout while trying to send command {}".format(command)) from e
 
         if len(my_buf) != sent:
-           raise ConnectionError(
+            raise ConnectionError(
               "Failed sending entire buffer to projector. Sent {} out of {} !".format(sent, len(my_buf)))
 
         #Check if command is an simulated ir command without a response from the projector and always return true to avoid a timeout
@@ -179,7 +182,7 @@ class Projector:
         sock.settimeout(timeout)
         try:
             SDAP_buffer, addr = sock.recvfrom(1028)
-        except socket.timeout as e:
+        except socket.timeout:
             return False
 
         self.header, self.info = process_SDAP(SDAP_buffer)
@@ -201,8 +204,8 @@ class Projector:
         sock.settimeout(timeout)
         try:
             SDAP_buffer, addr = sock.recvfrom(1028)
-        except socket.timeout:
-            raise Exception("Timeout while waiting for data from projector")
+        except socket.timeout as e:
+            raise Exception("Timeout while waiting for data from projector") from e
 
         serial = unpack('>I', SDAP_buffer[20:24])[0]
         model = decode_text_field(SDAP_buffer[8:20])

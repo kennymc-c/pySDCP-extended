@@ -19,6 +19,7 @@ Python **3** library to query and control Sony Projectors using SDCP (PJ Talk) p
 * Query lamp hours
 * Query model name and serial number
 * Show response error message from the projector
+* Set a custom PJ Talk community & UDP advertisement SDAP port and TCP SDCP port
 
 ## Protocol Documentation
 
@@ -67,6 +68,12 @@ Skip discovery to save time or if you know the IP of the projector
 ```python
 my_known_projector = pysdcp.Projector('10.1.2.3')
 my_known_projector.set_HDMI_input(2)
+```
+
+You can also set a custom PJ Talk community and tcp/udp port. By default "SONY" will be used as the community and 53862 as udp port for SDAP advertisement and 53484 as tcp port for SDCP
+
+```python
+my_known_projector = pysdcp.Projector(ip='10.1.2.3', community="THEATER", udp_port=53860, tcp_port=53480)
 ```
 
 ### Commands from protocol.py

@@ -46,9 +46,7 @@ Supported Sony projectors should include:
 
 ## Installation
 
-_Currently only available on Test PyPi_
-
-```pip install --index-url https://test.pypi.org/simple/ pysdcp-extended```
+```pip install pysdcp-extended```
 
 ## Examples
 

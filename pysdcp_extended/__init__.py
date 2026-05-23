@@ -6,8 +6,8 @@ from struct import *
 
 from pysdcp_extended.protocol import *
 
-Header = namedtuple("Header", ['version', 'category', 'community'])
-ProjInfo = namedtuple("ProjInfo", ['id', 'product_name', 'serial_number', 'power_state', 'location'])
+Header = namedtuple("Header", ["version", "category", "community"])
+ProjInfo = namedtuple("ProjInfo", ["id", "product_name", "serial_number", "power_state", "location"])
 
 
 def create_command_buffer(header: Header, action, command, data=None):
@@ -61,8 +61,8 @@ def process_SDAP(SDAP_buffer) -> (Header, ProjInfo):
         my_info = ProjInfo(
             id=SDAP_buffer[0:2].decode(),
             product_name=decode_text_field(SDAP_buffer[8:20]),
-            serial_number=unpack('>I', SDAP_buffer[20:24])[0],
-            power_state=unpack('>H', SDAP_buffer[24:26])[0],
+            serial_number=unpack(">I", SDAP_buffer[20:24])[0],
+            power_state=unpack(">H", SDAP_buffer[24:26])[0],
             location=decode_text_field(SDAP_buffer[26:]))
     except Exception as e:
         print("Error parsing SDAP packet: {}".format(e))
@@ -76,7 +76,7 @@ def decode_text_field(buf):
     :param buf: bytearray with array of chars
     :return: string
     """
-    return buf.decode().strip(b'\x00'.decode())
+    return buf.decode().strip(b"\x00".decode())
 
 
 class Projector:
@@ -207,7 +207,7 @@ class Projector:
         except socket.timeout as e:
             raise Exception("Timeout while waiting for data from projector") from e
 
-        serial = unpack('>I', SDAP_buffer[20:24])[0]
+        serial = unpack(">I", SDAP_buffer[20:24])[0]
         model = decode_text_field(SDAP_buffer[8:20])
         ip = addr[0]
 
@@ -219,6 +219,13 @@ class Projector:
         self._send_command(action=ACTIONS["SET"], command=COMMANDS["SET_POWER"],
                            data=POWER_STATUS["START_UP"] if on else POWER_STATUS["STANDBY"])
         return True
+
+    def get_power(self):
+        data = self._send_command(action=ACTIONS["GET"], command=COMMANDS["GET_STATUS_POWER"])
+        if data == POWER_STATUS["STANDBY"] or data == POWER_STATUS["COOLING"] or data == POWER_STATUS["COOLING2"]:
+            return False
+        else:
+            return True
 
     def set_HDMI_input(self, hdmi_num: int):
         self._send_command(action=ACTIONS["SET"], command=COMMANDS["INPUT"],
@@ -244,12 +251,10 @@ class Projector:
                            data=valid_values[value])
         return True
 
-    def get_power(self):
-        data = self._send_command(action=ACTIONS["GET"], command=COMMANDS["GET_STATUS_POWER"])
-        if data == POWER_STATUS["STANDBY"] or data == POWER_STATUS["COOLING"] or data == POWER_STATUS["COOLING2"]:
-            return False
-        else:
-            return True
+    def set_muting(self, on=True):
+        self._send_command(action=ACTIONS["SET"], command=COMMANDS["PICTURE_MUTING"],
+                           data=PICTURE_MUTING["ON"] if on else PICTURE_MUTING["OFF"])
+        return True
 
     def get_muting(self):
         data = self._send_command(action=ACTIONS["GET"], command=COMMANDS["PICTURE_MUTING"])
@@ -257,25 +262,6 @@ class Projector:
             return False
         else:
             return True
-
-    def set_muting(self, on=True):
-        self._send_command(action=ACTIONS["SET"], command=COMMANDS["PICTURE_MUTING"],
-                           data=PICTURE_MUTING["ON"] if on else PICTURE_MUTING["OFF"])
-        return True
-
-    def get_lamp_hours(self):
-        data = self._send_command(action=ACTIONS["GET"], command=COMMANDS["GET_STATUS_LAMP_TIMER"])
-        hours = "{:d}".format(data)
-        return hours
-
-    def get_calibration_preset(self):
-        data = self._send_command(action=ACTIONS["GET"], command=COMMANDS["CALIBRATION_PRESET"])
-        # Reverse lookup: find the key (preset name) that matches the numeric value
-        for preset_name, preset_value in CALIBRATION_PRESETS.items():
-            if preset_value == data:
-                return preset_name
-        # If no match found, return the numeric value as fallback
-        return data
 
     def get_HDMI_dynamic_range(self, hdmi_num: int):
         if hdmi_num == 1:
@@ -325,13 +311,27 @@ class Projector:
             raise ValueError(
                 "Invalid calibration preset: {}. Expected one of: {}".format(
                     preset_name, list(CALIBRATION_PRESETS.keys())))
-        
+
         self._send_command(action=ACTIONS["SET"], command=COMMANDS["CALIBRATION_PRESET"],
                            data=CALIBRATION_PRESETS[preset_name])
         return True
 
+    def get_calibration_preset(self):
+        data = self._send_command(action=ACTIONS["GET"], command=COMMANDS["CALIBRATION_PRESET"])
+        # Reverse lookup: find the key (preset name) that matches the numeric value
+        for preset_name, preset_value in CALIBRATION_PRESETS.items():
+            if preset_value == data:
+                return preset_name
+        # If no match found, return the numeric value as fallback
+        return data
 
-if __name__ == '__main__':
+    def get_lamp_hours(self):
+        data = self._send_command(action=ACTIONS["GET"], command=COMMANDS["GET_STATUS_LAMP_TIMER"])
+        hours = "{:d}".format(data)
+        return hours
+
+
+if __name__ == "__main__":
     # b = Projector()
     # b.find_projector(timeout=1)
     # # print(b.get_power())

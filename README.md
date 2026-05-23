@@ -9,22 +9,25 @@ Python **3** library to query and control Sony Projectors using SDCP (PJ Talk) p
 ## Features
 
 * Auto discover projector using SDAP (Simple Display Advertisement Protocol)
-* Query and change power & input (HDMI 1 + 2)
-* Set aspect ratio/zoom and calibration presets
-
-### Extended Features
-
-* Support for more commands (added to protocol.py)
-* Query and set picture muting
-* Query lamp hours
-* Query model name and serial number
-* Show response error message from the projector
 * Set a custom PJ Talk community & UDP advertisement SDAP port and TCP SDCP port
+* Show response error message from the projector
+* Get/Set
+  * Power
+  * Input (HDMI 1 + 2)
+  * Calibration preset
+  * Picture muting
+  * HDMI dynamic range
+  * Aspect ratio/zoom
+  * Any command from protocol.py using `_send_command()` ([Example](commands-from-protocol.py))
+* Get
+  * Lamp hours
+  * Model name
+  * Serial number
 
 ## Protocol Documentation
 
-* [Link](https://www.digis.ru/upload/iblock/f5a/VPL-VW320,%20VW520_ProtocolManual.pdf)
-* [Link](https://docs.sony.com/release/VW100_protocol.pdf)
+* [https://www.digis.ru/upload/iblock/f5a/VPL-VW320,%20VW520_ProtocolManual.pdf](https://www.digis.ru/upload/iblock/f5a/VPL-VW320,%20VW520_ProtocolManual.pdf)
+* [https://docs.sony.com/release/VW100_protocol.pdf](https://docs.sony.com/release/VW100_protocol.pdf)
 
 ## Supported Projectors
 

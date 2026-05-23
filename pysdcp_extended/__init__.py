@@ -268,6 +268,68 @@ class Projector:
         hours = "{:d}".format(data)
         return hours
 
+    def get_calibration_preset(self):
+        data = self._send_command(action=ACTIONS["GET"], command=COMMANDS["CALIBRATION_PRESET"])
+        # Reverse lookup: find the key (preset name) that matches the numeric value
+        for preset_name, preset_value in CALIBRATION_PRESETS.items():
+            if preset_value == data:
+                return preset_name
+        # If no match found, return the numeric value as fallback
+        return data
+
+    def get_HDMI_dynamic_range(self, hdmi_num: int):
+        if hdmi_num == 1:
+            command = COMMANDS["HDMI1_DYNAMIC_RANGE"]
+        elif hdmi_num == 2:
+            command = COMMANDS["HDMI2_DYNAMIC_RANGE"]
+        else:
+            raise ValueError("Invalid HDMI input: {}. Expected 1 or 2".format(hdmi_num))
+
+        data = self._send_command(action=ACTIONS["GET"], command=command)
+        for range_name, range_value in DYNAMIC_RANGES.items():
+            if range_value == data:
+                return range_name
+        return data
+
+    def get_HDMI1_dynamic_range(self):
+        return self.get_HDMI_dynamic_range(1)
+
+    def get_HDMI2_dynamic_range(self):
+        return self.get_HDMI_dynamic_range(2)
+
+    def set_HDMI_dynamic_range(self, hdmi_num: int, dynamic_range: str):
+        if hdmi_num == 1:
+            command = COMMANDS["HDMI1_DYNAMIC_RANGE"]
+        elif hdmi_num == 2:
+            command = COMMANDS["HDMI2_DYNAMIC_RANGE"]
+        else:
+            raise ValueError("Invalid HDMI input: {}. Expected 1 or 2".format(hdmi_num))
+
+        if dynamic_range not in DYNAMIC_RANGES:
+            raise ValueError(
+                "Invalid dynamic range: {}. Expected one of: {}".format(
+                    dynamic_range, list(DYNAMIC_RANGES.keys())))
+
+        self._send_command(action=ACTIONS["SET"], command=command,
+                           data=DYNAMIC_RANGES[dynamic_range])
+        return True
+
+    def set_HDMI1_dynamic_range(self, dynamic_range: str):
+        return self.set_HDMI_dynamic_range(1, dynamic_range)
+
+    def set_HDMI2_dynamic_range(self, dynamic_range: str):
+        return self.set_HDMI_dynamic_range(2, dynamic_range)
+
+    def set_calibration_preset(self, preset_name: str):
+        if preset_name not in CALIBRATION_PRESETS:
+            raise ValueError(
+                "Invalid calibration preset: {}. Expected one of: {}".format(
+                    preset_name, list(CALIBRATION_PRESETS.keys())))
+        
+        self._send_command(action=ACTIONS["SET"], command=COMMANDS["CALIBRATION_PRESET"],
+                           data=CALIBRATION_PRESETS[preset_name])
+        return True
+
 
 if __name__ == '__main__':
     # b = Projector()

@@ -11,8 +11,8 @@ Runs in stages, from harmless to intrusive. Only the read-only stages run by def
 7. soak        (--soak SECONDS) two threads polling at once, to find connection limits
 
 Writes and power changes ask before they run unless --yes is given. Every setting that is
-changed is put back, also when a step fails. The report is printed and written to a file;
-use --redact before posting it anywhere public.
+changed is put back, also when a step fails. The report is printed and written to
+test_reports/ in the repository (git-ignored); use --redact before posting it anywhere public.
 
 Without --ip, the projector is found via SDAP (and the library's own discovery for a
 Projector() created without an IP is tested as well).
@@ -62,6 +62,8 @@ ICONS = {PASS: "✅", WARN: "⚠️", FAIL: "❌", SKIP: "⏭️", INFO: "ℹ️
 # Settings that move the lens; left alone unless --include-lens is given.
 LENS_SETTINGS = {"PICTURE_POSITION"}
 COMMUNITY_ERROR = 0x201
+# Reports go to <repo>/test_reports/ (git-ignored) wherever the script is run from.
+REPORTS_DIR = Path(__file__).resolve().parent.parent / "test_reports"
 
 
 @dataclass
@@ -80,6 +82,8 @@ class Report:
     power_log: list[tuple[float, str]] = field(default_factory=list)
     model: str | None = None
     serial: int | None = None
+    private: dict[str, str] = field(default_factory=dict)
+    """Identifying text -> placeholder, for --redact."""
 
     def add(self, stage: str, name: str, status: str, detail: str, ms: float | None = None) -> Result:
         result = Result(stage, name, status, detail, ms)
@@ -166,7 +170,12 @@ def stage_discovery(args: argparse.Namespace, report: Report) -> None:
 
     # Sorted so the numbers in the choice prompt do not depend on which announcement arrived first.
     found = sorted(found, key=lambda item: (ipaddress.ip_address(item.ip), item.serial_number))
-    for item in found:
+    for number, item in enumerate(found, start=1):
+        suffix = "" if len(found) == 1 else f"-{number}"
+        report.private[item.ip] = f"<projector-ip{suffix}>"
+        report.private[str(item.serial_number)] = f"<serial{suffix}>"
+        if item.info.location:
+            report.private[item.info.location] = f"<location{suffix}>"
         report.add(
             "discovery",
             f"advertisement from {item.ip}",
@@ -517,10 +526,12 @@ def render(args: argparse.Namespace, report: Report) -> str:
     counts = Counter(r.status for r in report.results)
     lines += ["", "Summary: " + ", ".join(f"{counts[s]} {s}" for s in (PASS, WARN, FAIL, INFO, SKIP)), ""]
     text = "\n".join(lines)
-    if args.redact and args.ip:
-        text = text.replace(args.ip, "<projector-ip>")
-        if report.serial is not None:
-            text = text.replace(str(report.serial), "<serial>")
+    if args.redact:
+        if args.ip:
+            report.private.setdefault(args.ip, "<projector-ip>")
+        # Longest first, so a serial that contains another one is replaced whole.
+        for value in sorted(report.private, key=len, reverse=True):
+            text = text.replace(value, report.private[value])
     return text
 
 
@@ -529,8 +540,13 @@ def finish(args: argparse.Namespace, report: Report) -> int:
         args.community = "SONY"
     text = render(args, report)
     print(text)
-    model = (report.model or "projector").replace(" ", "_")
-    path = Path(args.output or f"hardware-report-{model}-{datetime.date.today().isoformat()}.md")
+    if args.output:
+        path = Path(args.output)
+    else:
+        model = (report.model or "projector").replace(" ", "_")
+        stamp = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
+        path = REPORTS_DIR / f"hardware-report-{model}-{stamp}.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
     print(f"\nReport written to {path}", file=sys.stderr)
     return 1 if report.failed else 0
@@ -555,8 +571,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--poll-interval", type=float, default=1.0, help="seconds between power polls (default: 1)")
     parser.add_argument("--soak", type=float, default=0.0, metavar="SECONDS", help="poll from two threads for this long")
     parser.add_argument("--yes", action="store_true", help="do not ask before writes and power changes")
-    parser.add_argument("--redact", action="store_true", help="hide the IP address and serial number in the report")
-    parser.add_argument("--output", help="report file (default: hardware-report-<model>-<date>.md)")
+    parser.add_argument("--redact", action="store_true", help="hide IP addresses, serial numbers and locations in the report")
+    parser.add_argument("--output", help="report file (default: test_reports/hardware-report-<model>-<date>_<time>.md)")
     return parser
 
 

@@ -91,6 +91,8 @@ def test_discovery_and_redaction(tmp_path: Path, free_udp_port: int) -> None:
     assert "VPL-VW520" in text
     assert "7654321" not in text
     assert "127.0.0.1" not in text
+    assert "Theater" not in text
+    assert "<location>" in text
 
 
 def test_unreachable_projector_fails(tmp_path: Path, free_tcp_port: int) -> None:
@@ -201,3 +203,20 @@ def test_skip_discovery_needs_an_ip() -> None:
     with pytest.raises(SystemExit) as excinfo:
         hardware_check.main(["--skip-discovery"])
     assert excinfo.value.code == 2
+
+
+def test_reports_default_to_the_ignored_folder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(hardware_check, "REPORTS_DIR", tmp_path / "test_reports")
+    with ProjectorSimulator() as sim:
+        args = ["--ip", sim.host, "--port", str(sim.port), "--timeout", "0.5", "--skip-discovery"]
+        assert hardware_check.main(args) == 0
+        assert hardware_check.main(args) == 0
+    reports = sorted((tmp_path / "test_reports").glob("hardware-report-projector-*.md"))
+    assert len(reports) >= 1
+    assert "## Hardware check" in reports[0].read_text()
+
+
+def test_reports_folder_is_git_ignored() -> None:
+    assert hardware_check.REPORTS_DIR.name == "test_reports"
+    assert hardware_check.REPORTS_DIR.parent == SCRIPT.resolve().parent.parent
+    assert "test_reports/" in (SCRIPT.parent.parent / ".gitignore").read_text().splitlines()

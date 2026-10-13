@@ -165,10 +165,12 @@ harmless to intrusive, and only the read-only stages run unless you ask for more
 | `--ir` | opens, moves through and closes the on-screen menu with simulated remote keys |
 | `--power` | switches the projector off and on again (or on and off), logging every power state with timestamps, and tries to power on while it cools down |
 | `--soak SECONDS` | polls from two threads at once to find connection limits |
-| `--redact` | hides the IP address and serial number in the report |
+| `--redact` | hides IP addresses, serial numbers and location names in the report |
 
 It asks before writes and power changes unless `--yes` is given, puts every setting back even
-when a step fails, and exits with status 1 if anything failed.
+when a step fails, and exits with status 1 if anything failed. Each run prints the report and
+saves it in `test_reports/` at the top of the repository, which git ignores because the reports
+contain your projector's IP address and serial number.
 
 Before using it on hardware, dry-run it against the simulator to see what the report looks like:
 

@@ -102,3 +102,6 @@ ENV/
 
 # JetBrains
 .idea
+
+# Reports from scripts/hardware_check.py; they contain IP addresses and serial numbers
+test_reports/

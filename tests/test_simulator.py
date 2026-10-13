@@ -11,6 +11,7 @@ from pysdcp_extended import (
     Projector,
     SDCPCommandError,
     SDCPProtocolError,
+    SDCPTimeoutError,
     create_command_buffer,
     process_command_response,
 )
@@ -149,3 +150,17 @@ def test_apply_delay_keeps_the_old_value_for_a_while(projector: Projector, state
     assert projector.get_setting("HDR") == "OFF"
     time.sleep(0.25)
     assert projector.get_setting("HDR") == "AUTO"
+
+
+def test_start_delay_and_silence_after_power_off(projector: Projector, state: SimulatorState) -> None:
+    state.start_delay_seconds = 0.2
+    state.silent_after_off_seconds = 0.3
+    projector.set_power(True)
+    assert projector.get_power_status() == "STANDBY"
+    time.sleep(0.25)
+    assert projector.get_power_status() == "START_UP"
+    projector.set_power(False)
+    with pytest.raises(SDCPTimeoutError):
+        projector.get_power_status()
+    time.sleep(0.35)
+    assert projector.get_power_status() == "STANDBY"

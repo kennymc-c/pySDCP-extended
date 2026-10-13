@@ -472,66 +472,105 @@ def stage_power(args: argparse.Namespace, report: Report, projector: Projector) 
         report.add("power", "cycle", SKIP, "declined at the prompt")
         return
     began = time.monotonic()
+    last_logged: list[str | None] = [None]
 
-    def poll_until(targets: set[str], limit: float) -> str | None:
-        last: str | None = None
+    def now() -> float:
+        return time.monotonic() - began
+
+    def poll_until(targets: set[str], limit: float) -> tuple[str | None, float]:
+        """Poll until a target state; return (state, seconds since start) or (None, now) on timeout."""
         deadline = time.monotonic() + limit
         while time.monotonic() < deadline:
             try:
                 state = str(projector.get_power_status())
             except SDCPError as err:
                 state = f"error: {type(err).__name__}"
-            if state != last:
-                report.power_log.append((time.monotonic() - began, state))
-                print(f"  {time.monotonic() - began:6.1f} s  {state}", file=sys.stderr, flush=True)
-                last = state
+            if state != last_logged[0]:
+                report.power_log.append((now(), state))
+                print(f"  {now():6.1f} s  {state}", file=sys.stderr, flush=True)
+                last_logged[0] = state
             if state in targets:
-                return state
+                return state, now()
             time.sleep(args.poll_interval)
-        return None
+        return None, now()
 
-    def switch(on: bool) -> tuple[Any, BaseException | None, float]:
+    def switch(on: bool) -> tuple[BaseException | None, float, float]:
+        """Announce and send a power command; return (error, ms, seconds since start)."""
         try:
             current = str(projector.get_power_status())
         except SDCPError:
             current = "unknown"
         change = report.announce("power", current, "on" if on else "off")
-        result = timed(partial(projector.set_power, on))
-        change.outcome = "accepted" if result[1] is None else describe(result[1])
-        return result
+        sent_at = now()
+        _, err, ms = timed(partial(projector.set_power, on))
+        change.outcome = "accepted" if err is None else describe(err)
+        return err, ms, sent_at
+
+    def first_change_after(moment: float, away_from: str) -> float | None:
+        """Seconds after ``moment`` until the log first shows a state other than ``away_from``."""
+        for seconds, state in report.power_log:
+            if seconds > moment and state != away_from:
+                return seconds - moment
+        return None
 
     def turn_on() -> None:
-        _, err, ms = switch(True)
+        err, ms, sent_at = switch(True)
         if err is not None:
             report.add("power", "power on", FAIL, describe(err), ms)
             return
-        reached = poll_until({"POWER_ON"}, args.power_limit)
-        report.add(
-            "power", "power on", PASS if reached else FAIL, "reached POWER_ON" if reached else "never reached POWER_ON", ms
-        )
+        reached, at = poll_until({"POWER_ON"}, args.power_limit)
+        if not reached:
+            report.add("power", "power on", FAIL, f"never reached POWER_ON in {args.power_limit:.0f} s", ms)
+            return
+        report.add("power", "power on", PASS, f"POWER_ON {at - sent_at:.1f} s after the command", ms)
+        lag = first_change_after(sent_at, "STANDBY")
+        if lag is not None and lag > max(2 * args.poll_interval, 1.0):
+            report.add("power", "status after power on", INFO, f"still reported STANDBY for {lag:.1f} s after the command")
 
     def turn_off() -> None:
-        _, err, ms = switch(False)
+        err, ms, sent_at = switch(False)
         if err is not None:
             report.add("power", "power off", FAIL, describe(err), ms)
             return
-        state = poll_until({"COOLING", "COOLING2", "STANDBY"}, args.power_limit)
+        state, at = poll_until({"COOLING", "COOLING2", "STANDBY"}, args.power_limit)
         if state in ("COOLING", "COOLING2"):
-            _, err, on_ms = switch(True)
-            if isinstance(err, SDCPCommandError):
-                report.add(
-                    "power", "power on while cooling", INFO, f"refused: {err.error_message} (0x{err.error_code or 0:x})", on_ms
-                )
-            elif err is None:
-                report.add("power", "power on while cooling", INFO, "accepted", on_ms)
-            else:
-                report.add("power", "power on while cooling", FAIL, describe(err), on_ms)
-        state = poll_until({"STANDBY", "POWER_ON"}, args.power_limit)
-        if state == "POWER_ON":
-            report.notes.append("Power on during cooling was queued: the projector came back on by itself.")
-            switch(False)
-            state = poll_until({"STANDBY"}, args.power_limit)
-        report.add("power", "power off", PASS if state == "STANDBY" else FAIL, f"ended in {state}", ms)
+            on_err, on_ms, on_at = switch(True)
+            if isinstance(on_err, SDCPCommandError):
+                detail = f"refused: {on_err.error_message} (0x{on_err.error_code or 0:x})"
+                report.add("power", "power on while cooling", INFO, detail, on_ms)
+            elif on_err is not None:
+                report.add("power", "power on while cooling", FAIL, describe(on_err), on_ms)
+            state, at = poll_until({"STANDBY", "POWER_ON"}, args.power_limit)
+            if on_err is None and state == "POWER_ON":
+                left = first_change_after(on_at, state_at(on_at))
+                when = f"left {state_at(on_at)} after {left:.1f} s and " if left is not None else ""
+                detail = f"accepted: {when}reached POWER_ON {at - on_at:.1f} s after the command"
+                report.add("power", "power on while cooling", INFO, detail, on_ms)
+                err, ms, sent_at = switch(False)
+                state, at = poll_until({"STANDBY"}, args.power_limit)
+            elif on_err is None:
+                report.add("power", "power on while cooling", INFO, f"accepted, but the projector went on to {state}", on_ms)
+        if state == "STANDBY":
+            report.add("power", "power off", PASS, f"STANDBY {at - sent_at:.1f} s after the command", ms)
+        else:
+            report.add("power", "power off", FAIL, f"ended in {state}", ms)
+
+    def state_at(moment: float) -> str:
+        """The last state logged at or before ``moment``."""
+        current = "unknown"
+        for seconds, state in report.power_log:
+            if seconds > moment:
+                break
+            current = state
+        return current
+
+    def report_silences() -> None:
+        """Turn stretches where the projector did not answer into INFO rows."""
+        log = report.power_log
+        for index, (seconds, state) in enumerate(log):
+            if state.startswith("error:") and index + 1 < len(log):
+                gap = log[index + 1][0] - seconds
+                report.add("power", "no answer", INFO, f"{state[7:]} at {seconds:.1f} s; answered again {gap:.1f} s later")
 
     report.pending["POWER"] = start
     if start == "STANDBY":
@@ -540,6 +579,7 @@ def stage_power(args: argparse.Namespace, report: Report, projector: Projector) 
     else:
         turn_off()
         turn_on()
+    report_silences()
     final = projector.get_power_status()
     if final == start:
         report.pending.pop("POWER", None)

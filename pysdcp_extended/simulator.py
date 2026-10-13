@@ -107,6 +107,12 @@ class SimulatorState:
     cool_down_seconds: float | None = None
     """Seconds spent in COOLING after power off before STANDBY. None or 0: straight to STANDBY."""
     power_changed_at: float = field(default=0.0, repr=False)
+    start_delay_seconds: float = 0.0
+    """After power on from STANDBY, keep reporting STANDBY this long before START_UP."""
+    silent_after_off_seconds: float = 0.0
+    """After power off, leave requests unanswered this long, as some projectors do."""
+    silent_until: float = field(default=0.0, repr=False)
+    powered_on_from_standby: bool = field(default=False, repr=False)
     apply_seconds: float = 0.0
     """Seconds before a SET takes effect; until then GET still returns the previous value."""
     scheduled: dict[int, tuple[int, float]] = field(default_factory=dict, repr=False)
@@ -122,7 +128,14 @@ class SimulatorState:
     def current_power(self) -> int:
         """Return the power status, advancing warm-up and cool-down by the clock."""
         elapsed = time.monotonic() - self.power_changed_at
-        if self.power == POWER_STATUS["START_UP"] and self.warm_up_seconds is not None and elapsed >= self.warm_up_seconds:
+        delay = self.start_delay_seconds if self.powered_on_from_standby else 0.0
+        if self.power == POWER_STATUS["START_UP"] and elapsed < delay:
+            return POWER_STATUS["STANDBY"]
+        if (
+            self.power == POWER_STATUS["START_UP"]
+            and self.warm_up_seconds is not None
+            and elapsed >= delay + self.warm_up_seconds
+        ):
             self.power = POWER_STATUS["POWER_ON"]
         elif self.power == POWER_STATUS["COOLING"] and self.cool_down_seconds is not None and elapsed >= self.cool_down_seconds:
             self.power = POWER_STATUS["STANDBY"]
@@ -226,12 +239,14 @@ def _handle_set(state: SimulatorState, command: int, data: int | None) -> bytes:
         current = state.current_power()
         if data == POWER_STATUS["START_UP"]:
             if current not in (POWER_STATUS["START_UP"], POWER_STATUS["START_UP_LAMP"], POWER_STATUS["POWER_ON"]):
+                state.powered_on_from_standby = current == POWER_STATUS["STANDBY"]
                 state.power = POWER_STATUS["START_UP"]
                 state.power_changed_at = time.monotonic()
         elif data == POWER_STATUS["STANDBY"]:
             if current != POWER_STATUS["STANDBY"]:
                 state.power = POWER_STATUS["COOLING"] if state.cool_down_seconds else POWER_STATUS["STANDBY"]
                 state.power_changed_at = time.monotonic()
+                state.silent_until = time.monotonic() + state.silent_after_off_seconds
         else:
             return build_response(state.community, False, command, ERROR_INVALID_DATA)
         return build_response(state.community, True, command, None)
@@ -259,6 +274,11 @@ class _SDCPHandler(socketserver.BaseRequestHandler):
         if not request:
             return
         state = self.server.state
+        if time.monotonic() < state.silent_until:
+            # Hold the connection open without answering, so the client times out.
+            with contextlib.suppress(OSError):
+                self.request.recv(1)
+            return
         reply = handle_request(state, request)
         if state.hold_seconds:
             time.sleep(state.hold_seconds)

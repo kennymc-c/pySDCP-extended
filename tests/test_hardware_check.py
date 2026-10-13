@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import itertools
 import sys
 import time
 from collections.abc import Callable
@@ -415,3 +416,29 @@ def test_ctrl_c_during_power_cycle_says_how_to_get_back(tmp_path: Path, monkeypa
     assert "- turn the projector on again:" in text
     assert " power on`" in text
     assert "- power: POWER_ON → off (accepted)" in text
+
+
+def test_power_report_matches_what_a_vw295es_does(tmp_path: Path) -> None:
+    # Timings scaled down from a real VPL-VW295ES run: it kept reporting STANDBY for a while after
+    # the on command, went silent briefly after the off command, and went straight back to warming
+    # up when switched on during cool-down.
+    state = SimulatorState(
+        start_delay_seconds=1.3,
+        warm_up_seconds=0.3,
+        cool_down_seconds=0.8,
+        silent_after_off_seconds=0.4,
+    )
+    report = tmp_path / "report.md"
+    with ProjectorSimulator(state=state) as sim:
+        args = _args(sim, report, "--skip-discovery", "--power", "--yes")
+        args[args.index("--timeout") + 1] = "0.2"
+        code = hardware_check.main(args)
+    text = report.read_text()
+    assert code == 0, text
+    assert state.power == POWER_STATUS["STANDBY"]
+    assert "| power | status after power on | still reported STANDBY for" in text
+    assert "| power | no answer | SDCPTimeoutError at" in text
+    assert "| power | power on while cooling | accepted: left COOLING" in text
+    assert "was queued" not in text
+    timeline = [line.split(": ", 1)[1] for line in text.split("Power state timeline:")[1].split("\n\n")[1].splitlines()]
+    assert all(a != b for a, b in itertools.pairwise(timeline)), timeline

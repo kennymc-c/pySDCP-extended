@@ -107,6 +107,17 @@ class SimulatorState:
     cool_down_seconds: float | None = None
     """Seconds spent in COOLING after power off before STANDBY. None or 0: straight to STANDBY."""
     power_changed_at: float = field(default=0.0, repr=False)
+    apply_seconds: float = 0.0
+    """Seconds before a SET takes effect; until then GET still returns the previous value."""
+    scheduled: dict[int, tuple[int, float]] = field(default_factory=dict, repr=False)
+
+    def apply_due(self) -> None:
+        """Apply the delayed SETs whose time has come."""
+        now = time.monotonic()
+        for command, (value, due) in list(self.scheduled.items()):
+            if due <= now:
+                self.settings[command] = value
+                del self.scheduled[command]
 
     def current_power(self) -> int:
         """Return the power status, advancing warm-up and cool-down by the clock."""
@@ -203,6 +214,7 @@ def _handle_get(state: SimulatorState, command: int) -> bytes:
     if command == COMMANDS["GET_STATUS_ERROR"]:
         return build_response(state.community, True, command, state.error_status)
     if command in state.settings:
+        state.apply_due()
         return build_response(state.community, True, command, state.settings[command])
     return build_response(state.community, False, command, ERROR_INVALID_ITEM_REQUEST)
 
@@ -228,7 +240,10 @@ def _handle_set(state: SimulatorState, command: int, data: int | None) -> bytes:
         return build_response(state.community, False, command, ERROR_INVALID_ITEM_REQUEST)
     if data not in SETTINGS[name].values():
         return build_response(state.community, False, command, ERROR_INVALID_DATA)
-    state.settings[command] = data
+    if state.apply_seconds:
+        state.scheduled[command] = (data, time.monotonic() + state.apply_seconds)
+    else:
+        state.settings[command] = data
     return build_response(state.community, True, command, None)
 
 

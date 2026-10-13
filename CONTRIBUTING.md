@@ -167,8 +167,14 @@ harmless to intrusive, and only the read-only stages run unless you ask for more
 | `--soak SECONDS` | polls from two threads at once to find connection limits |
 | `--redact` | hides IP addresses, serial numbers and location names in the report |
 
-It asks before writes and power changes unless `--yes` is given, puts every setting back even
-when a step fails, and exits with status 1 if anything failed. Each run prints the report and
+Before writes and power changes it lists what it will change and asks, unless `--yes` is given.
+While it runs it announces each change before making it (`>>> Changing HDR from OFF to ON`) and
+each restore (`<<< Restoring HDR from ON to OFF`). Every setting is put back afterwards, with up
+to three tries (`--restore-attempts`), also when a step fails or you press Ctrl+C. Anything it
+could not put back is listed under **Set these back by hand** at the top of the report and again
+at the end of the output, with the command that fixes it. A report is written even if the run is
+interrupted or crashes. The exit status is 0 when nothing failed, 1 if something failed, and 130
+after Ctrl+C. Each run prints the report and
 saves it in `test_reports/` at the top of the repository, which git ignores because the reports
 contain your projector's IP address and serial number.
 

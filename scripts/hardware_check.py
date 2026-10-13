@@ -10,8 +10,11 @@ Runs in stages, from harmless to intrusive. Only the read-only stages run by def
 6. power       (--power) switch off and on again, logging every power state with timestamps
 7. soak        (--soak SECONDS) two threads polling at once, to find connection limits
 
-Writes and power changes ask before they run unless --yes is given. Every setting that is
-changed is put back, also when a step fails. The report is printed and written to
+Writes and power changes list what they will change and ask before they run unless --yes is
+given. Every change is announced as it happens ("Changing HDR from OFF to ON"), and every
+setting is put back afterwards, with retries, also when a step fails or you press Ctrl+C.
+Anything that could not be put back is listed at the top of the report and at the end of the
+output, with the command that sets it back by hand. The report is printed and written to
 test_reports/ in the repository (git-ignored); use --redact before posting it anywhere public.
 
 Without --ip, the projector is found via SDAP (and the library's own discovery for a
@@ -37,6 +40,7 @@ import statistics
 import sys
 import threading
 import time
+import traceback
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -76,6 +80,16 @@ class Result:
 
 
 @dataclass
+class Change:
+    """One change the script made to the projector, for the report's change log."""
+
+    what: str
+    old: str
+    new: str
+    outcome: str = "sent"
+
+
+@dataclass
 class Report:
     results: list[Result] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
@@ -84,6 +98,18 @@ class Report:
     serial: int | None = None
     private: dict[str, str] = field(default_factory=dict)
     """Identifying text -> placeholder, for --redact."""
+    changes: list[Change] = field(default_factory=list)
+    pending: dict[str, str] = field(default_factory=dict)
+    """What was changed -> its original value, until the original is confirmed back."""
+    stage: str = "start"
+    interrupted: bool = False
+
+    def announce(self, what: str, old: str, new: str) -> Change:
+        """Say out loud what is about to change, and log it."""
+        print(f">>> Changing {what} from {old} to {new}", file=sys.stderr, flush=True)
+        change = Change(what, old, new)
+        self.changes.append(change)
+        return change
 
     def add(self, stage: str, name: str, status: str, detail: str, ms: float | None = None) -> Result:
         result = Result(stage, name, status, detail, ms)
@@ -321,11 +347,16 @@ def stage_write(args: argparse.Namespace, report: Report, projector: Projector, 
     if projector.get_power_status() != "POWER_ON":
         report.add("write", "settings", SKIP, "projector is not POWER_ON; turn it on, wait for a picture, and run again")
         return
-    if not confirm(args, "Change each setting, read it back and restore it?"):
+    planned = {name: original for name, original in values.items() if name not in LENS_SETTINGS or args.include_lens}
+    print("The write stage changes these settings one at a time and puts each one back:", file=sys.stderr)
+    for name, original in planned.items():
+        first = next((value for value in SETTINGS[name] if value != original), None)
+        print(f"  {name}: {original} -> {first} -> {original}", file=sys.stderr)
+    if not confirm(args, "Go ahead?"):
         report.add("write", "settings", SKIP, "declined at the prompt")
         return
     for name, original in values.items():
-        if name in LENS_SETTINGS and not args.include_lens:
+        if name not in planned:
             report.add("write", name, SKIP, "moves the lens; pass --include-lens to test it")
             continue
         write_one(args, report, projector, name, original)
@@ -334,38 +365,68 @@ def stage_write(args: argparse.Namespace, report: Report, projector: Projector, 
 def write_one(args: argparse.Namespace, report: Report, projector: Projector, name: str, original: str) -> None:
     candidates = [value for value in SETTINGS[name] if value != original][: args.write_attempts]
     refused: list[str] = []
+    report.pending[name] = original
     try:
         for candidate in candidates:
+            change = report.announce(name, original, candidate)
             _, err, ms = timed(partial(projector.set_setting, name, candidate))
             if isinstance(err, SDCPCommandError):
+                change.outcome = f"refused: {err.error_message}"
                 refused.append(f"{candidate} ({err.error_message})")
                 continue
             if err is not None:
+                change.outcome = f"failed: {describe(err)}"
                 report.add("write", name, FAIL, f"set {candidate}: {describe(err)}", ms)
                 return
             time.sleep(args.settle)
             readback, err, read_ms = timed(lambda: projector.get_setting(name))
             if err is not None:
+                change.outcome = "accepted, read back failed"
                 report.add("write", name, FAIL, f"set {candidate} ok, read back failed: {describe(err)}", read_ms)
             elif readback == candidate:
+                change.outcome = "applied"
                 report.add("write", name, PASS, f"{original} → {candidate} → read back {readback}", ms)
             else:
+                change.outcome = f"accepted, but read back {readback}"
                 report.add("write", name, WARN, f"set {candidate} accepted but read back {readback!r}", ms)
             return
         detail = "refused " + ", ".join(refused) if refused else "no other value to try"
         report.add("write", name, INFO, detail)
     finally:
-        restore(report, projector, name, original)
+        restore(args, report, projector, name, original)
 
 
-def restore(report: Report, projector: Projector, name: str, original: str) -> None:
-    try:
-        if projector.get_setting(name) != original:
+def restore(args: argparse.Namespace, report: Report, projector: Projector, name: str, original: str) -> None:
+    """Put ``name`` back to ``original``, retrying; leave it in ``report.pending`` if that fails."""
+    problem = "unknown"
+    for attempt in range(1, args.restore_attempts + 1):
+        try:
+            current = projector.get_setting(name)
+            if current == original:
+                break
+            retry = f" (attempt {attempt} of {args.restore_attempts})" if attempt > 1 else ""
+            print(f"<<< Restoring {name} from {current} to {original}{retry}", file=sys.stderr, flush=True)
             projector.set_setting(name, original)
-            if projector.get_setting(name) != original:
-                raise SDCPError("read back differs after restoring")
-    except SDCPError as err:
-        report.add("write", f"restore {name}", FAIL, f"could not restore {original}: {describe(err)}; set it by hand")
+            # Same wait as after a change: a projector can take a moment to apply a value.
+            time.sleep(args.settle)
+            current = projector.get_setting(name)
+            if current == original:
+                break
+            problem = f"read back {current} after restoring"
+        except SDCPError as err:
+            problem = describe(err)
+            time.sleep(args.settle)
+    else:
+        report.add(
+            "write",
+            f"restore {name}",
+            FAIL,
+            f"could not put back {original} after {args.restore_attempts} attempts ({problem}); see the top of the report",
+        )
+        return
+    report.pending.pop(name, None)
+    if attempt > 1:
+        report.add("write", f"restore {name}", WARN, f"back to {original}, but only on attempt {attempt}")
 
 
 def stage_ir(args: argparse.Namespace, report: Report, projector: Projector) -> None:
@@ -378,11 +439,16 @@ def stage_ir(args: argparse.Namespace, report: Report, projector: Projector) -> 
     if not confirm(args, "Open and close the on-screen menu with simulated remote keys?"):
         report.add("ir", "remote keys", SKIP, "declined at the prompt")
         return
-    for key in ("MENU", "CURSOR_DOWN", "CURSOR_UP", "MENU"):
+    for number, key in enumerate(("MENU", "CURSOR_DOWN", "CURSOR_UP", "MENU")):
+        print(f">>> Pressing the remote key {key}", file=sys.stderr, flush=True)
         _, err, ms = timed(partial(projector.send_ir_command, key))
         if err is not None:
             report.add("ir", key, FAIL, describe(err), ms)
             return
+        if number == 0:
+            report.pending["ON_SCREEN_MENU"] = "closed"
+        elif number == 3:
+            report.pending.pop("ON_SCREEN_MENU", None)
         # IR keys get no reply; anything near the TCP timeout means the client waited for one.
         report.add("ir", key, PASS if ms < 1000 else FAIL, f"0x{COMMANDS_IR[key]:04x} sent", ms)
         time.sleep(1.5)
@@ -424,8 +490,18 @@ def stage_power(args: argparse.Namespace, report: Report, projector: Projector) 
             time.sleep(args.poll_interval)
         return None
 
+    def switch(on: bool) -> tuple[Any, BaseException | None, float]:
+        try:
+            current = str(projector.get_power_status())
+        except SDCPError:
+            current = "unknown"
+        change = report.announce("power", current, "on" if on else "off")
+        result = timed(partial(projector.set_power, on))
+        change.outcome = "accepted" if result[1] is None else describe(result[1])
+        return result
+
     def turn_on() -> None:
-        _, err, ms = timed(lambda: projector.set_power(True))
+        _, err, ms = switch(True)
         if err is not None:
             report.add("power", "power on", FAIL, describe(err), ms)
             return
@@ -435,13 +511,13 @@ def stage_power(args: argparse.Namespace, report: Report, projector: Projector) 
         )
 
     def turn_off() -> None:
-        _, err, ms = timed(lambda: projector.set_power(False))
+        _, err, ms = switch(False)
         if err is not None:
             report.add("power", "power off", FAIL, describe(err), ms)
             return
         state = poll_until({"COOLING", "COOLING2", "STANDBY"}, args.power_limit)
         if state in ("COOLING", "COOLING2"):
-            _, err, on_ms = timed(lambda: projector.set_power(True))
+            _, err, on_ms = switch(True)
             if isinstance(err, SDCPCommandError):
                 report.add(
                     "power", "power on while cooling", INFO, f"refused: {err.error_message} (0x{err.error_code or 0:x})", on_ms
@@ -453,16 +529,22 @@ def stage_power(args: argparse.Namespace, report: Report, projector: Projector) 
         state = poll_until({"STANDBY", "POWER_ON"}, args.power_limit)
         if state == "POWER_ON":
             report.notes.append("Power on during cooling was queued: the projector came back on by itself.")
-            projector.set_power(False)
+            switch(False)
             state = poll_until({"STANDBY"}, args.power_limit)
         report.add("power", "power off", PASS if state == "STANDBY" else FAIL, f"ended in {state}", ms)
 
+    report.pending["POWER"] = start
     if start == "STANDBY":
         turn_on()
         turn_off()
     else:
         turn_off()
         turn_on()
+    final = projector.get_power_status()
+    if final == start:
+        report.pending.pop("POWER", None)
+    else:
+        report.add("power", "back to start", FAIL, f"started {start}, ended {final}; see the top of the report")
 
 
 def stage_soak(args: argparse.Namespace, report: Report) -> None:
@@ -511,6 +593,7 @@ def render(args: argparse.Namespace, report: Report) -> str:
         f"- Client: Python {platform.python_version()} on {platform.system()} {platform.release()}",
         f"- Options: {' '.join(sys.argv[1:])}",
         "",
+        *manual_section(args, report),
         "| | Stage | Check | Result | Time |",
         "|---|---|---|---|---|",
     ]
@@ -518,6 +601,10 @@ def render(args: argparse.Namespace, report: Report) -> str:
         timing = f"{r.ms:.0f} ms" if r.ms is not None else ""
         detail = r.detail.replace("|", "\\|")
         lines.append(f"| {ICONS[r.status]} | {r.stage} | {r.name} | {detail} | {timing} |")
+    if report.changes:
+        lines += ["", "Changes made, in order:", ""]
+        for change in report.changes:
+            lines.append(f"- {change.what}: {change.old} → {change.new} ({change.outcome})")
     if report.power_log:
         lines += ["", "Power state timeline:", ""]
         lines += [f"- {seconds:6.1f} s: {state}" for seconds, state in report.power_log]
@@ -535,6 +622,54 @@ def render(args: argparse.Namespace, report: Report) -> str:
     return text
 
 
+MANUAL_HINTS = {
+    "POWER": "turn the projector {original_lower} again",
+    "ON_SCREEN_MENU": "close the on-screen menu (press MENU on the remote, or wait for it to time out)",
+}
+
+
+def restore_command(args: argparse.Namespace, what: str, original: str) -> str:
+    """The CLI command that puts ``what`` back to ``original`` by hand."""
+    command = f"poetry run python -m pysdcp_extended --ip {args.ip}"
+    if args.port != DEFAULT_TCP_PORT:
+        command += f" --port {args.port}"
+    if args.community not in (None, "SONY"):
+        command += f" --community {args.community}"
+    if what == "POWER":
+        return command + (" power off" if original == "STANDBY" else " power on")
+    if what == "ON_SCREEN_MENU":
+        return command + " ir MENU"
+    return command + f" set {what} {original}"
+
+
+def manual_steps(args: argparse.Namespace, report: Report) -> list[tuple[str, str]]:
+    """(what to do, command) for everything that was changed and is not confirmed back."""
+    steps = []
+    for what, original in report.pending.items():
+        if what in MANUAL_HINTS:
+            text = MANUAL_HINTS[what].format(original_lower="off" if original == "STANDBY" else "on")
+        else:
+            text = f"set {what} back to {original}"
+        steps.append((text, restore_command(args, what, original)))
+    return steps
+
+
+def manual_section(args: argparse.Namespace, report: Report) -> list[str]:
+    steps = manual_steps(args, report)
+    if not steps:
+        return []
+    lines = [
+        "### ⚠️ Set these back by hand",
+        "",
+        "The run changed these and could not confirm they are back to how they were.",
+        "Use the projector's menu, or run the command shown:",
+        "",
+    ]
+    for text, command in steps:
+        lines += [f"- {text}:", f"  `{command}`"]
+    return [*lines, ""]
+
+
 def finish(args: argparse.Namespace, report: Report) -> int:
     if args.community is None:
         args.community = "SONY"
@@ -549,6 +684,13 @@ def finish(args: argparse.Namespace, report: Report) -> int:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
     print(f"\nReport written to {path}", file=sys.stderr)
+    steps = manual_steps(args, report)
+    if steps:
+        print("\n!!! The projector was left changed. Set these back by hand:", file=sys.stderr)
+        for step, command in steps:
+            print(f"!!!   {step}:\n!!!     {command}", file=sys.stderr)
+    if report.interrupted:
+        return 130
     return 1 if report.failed else 0
 
 
@@ -565,6 +707,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--include-lens", action="store_true", help="with --write, also change PICTURE_POSITION")
     parser.add_argument("--write-attempts", type=int, default=2, help="values to try per setting before giving up (default: 2)")
     parser.add_argument("--settle", type=float, default=1.0, help="seconds between a write and its read back (default: 1)")
+    parser.add_argument("--restore-attempts", type=int, default=3, help="tries to put each setting back (default: 3)")
     parser.add_argument("--ir", action="store_true", help="open and close the on-screen menu")
     parser.add_argument("--power", action="store_true", help="switch the projector off and on again")
     parser.add_argument("--power-limit", type=float, default=300.0, help="seconds to wait for each power transition")
@@ -583,17 +726,36 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--skip-discovery needs --ip")
     args.discovered = args.ip is None
     report = Report()
+    try:
+        run_stages(args, report)
+    except KeyboardInterrupt:
+        report.interrupted = True
+        report.add(report.stage, "run", INFO, "stopped with Ctrl+C")
+        report.notes.append(f"The run was stopped with Ctrl+C during the {report.stage} stage; later stages did not run.")
+    except Exception as err:  # a bug in this script or the library; still write the report
+        report.add(report.stage, "run", FAIL, f"crashed: {describe(err)}")
+        report.notes.append("Traceback:\n\n```\n" + traceback.format_exc().rstrip() + "\n```")
+    return finish(args, report)
+
+
+def run_stages(args: argparse.Namespace, report: Report) -> None:
+    report.stage = "discovery"
     stage_discovery(args, report)
     if args.community is None:
         args.community = "SONY"
     projector = make_projector(args)
+    report.stage = "read"
     values = stage_read(args, report, projector)
+    report.stage = "faults"
     stage_faults(args, report)
+    report.stage = "write"
     stage_write(args, report, projector, values)
+    report.stage = "ir"
     stage_ir(args, report, projector)
+    report.stage = "power"
     stage_power(args, report, projector)
+    report.stage = "soak"
     stage_soak(args, report)
-    return finish(args, report)
 
 
 if __name__ == "__main__":

@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+import time
+from collections.abc import Callable
 from pathlib import Path
 from types import ModuleType
+from typing import Any
 
 import pytest
 
+from pysdcp_extended import Projector, SDCPTimeoutError
 from pysdcp_extended.protocol import POWER_STATUS
 from pysdcp_extended.simulator import ProjectorSimulator, SDAPBroadcaster, SimulatorState
 
@@ -220,3 +224,194 @@ def test_reports_folder_is_git_ignored() -> None:
     assert hardware_check.REPORTS_DIR.name == "test_reports"
     assert hardware_check.REPORTS_DIR.parent == SCRIPT.resolve().parent.parent
     assert "test_reports/" in (SCRIPT.parent.parent / ".gitignore").read_text().splitlines()
+
+
+ORIGINAL_SET_SETTING = Projector.set_setting
+
+
+def _on_state(**kwargs: Any) -> SimulatorState:
+    return SimulatorState(power=POWER_STATUS["POWER_ON"], **kwargs)
+
+
+def _write_args(sim: ProjectorSimulator, report: Path, *extra: str) -> list[str]:
+    return _args(sim, report, "--skip-discovery", "--write", "--yes", *extra)
+
+
+def _patch_set_setting(
+    monkeypatch: pytest.MonkeyPatch, when: Callable[[str, str], bool], effect: Callable[[], None], apply_first: bool = False
+) -> list[tuple[str, str]]:
+    """Make set_setting run ``effect`` (raise) for matching calls; return every call made."""
+    calls: list[tuple[str, str]] = []
+
+    def patched(self: Projector, name: str, value: str) -> bool:
+        calls.append((name, value))
+        if when(name, value):
+            if apply_first:
+                ORIGINAL_SET_SETTING(self, name, value)
+            effect()
+        return ORIGINAL_SET_SETTING(self, name, value)
+
+    monkeypatch.setattr(Projector, "set_setting", patched)
+    return calls
+
+
+def _raise(exc: BaseException) -> Callable[[], None]:
+    def effect() -> None:
+        raise exc
+
+    return effect
+
+
+def test_changes_are_announced_and_logged(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    report = tmp_path / "report.md"
+    with ProjectorSimulator(state=_on_state()) as sim:
+        assert hardware_check.main(_write_args(sim, report)) == 0
+    err = capsys.readouterr().err
+    assert "  HDR: OFF -> ON -> OFF" in err
+    assert ">>> Changing HDR from OFF to ON" in err
+    assert "<<< Restoring HDR from ON to OFF" in err
+    text = report.read_text()
+    assert "- HDR: OFF → ON (applied)" in text
+    assert "Set these back by hand" not in text
+    assert "!!!" not in err
+
+
+def test_restore_that_keeps_failing_is_listed_for_manual_fixing(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = _patch_set_setting(monkeypatch, lambda n, v: (n, v) == ("HDR", "OFF"), _raise(SDCPTimeoutError("no answer")))
+    state = _on_state()
+    report = tmp_path / "report.md"
+    with ProjectorSimulator(state=state) as sim:
+        code = hardware_check.main(_write_args(sim, report, "--redact"))
+    assert code == 1
+    assert calls.count(("HDR", "OFF")) == 3
+    assert state.get("HDR") == 1
+    text = report.read_text()
+    # The manual section comes before the results table.
+    assert text.index("Set these back by hand") < text.index("| | Stage |")
+    assert "- set HDR back to OFF:" in text
+    assert "`poetry run python -m pysdcp_extended --ip <projector-ip> --port" in text
+    assert "set HDR OFF`" in text
+    assert "could not put back OFF after 3 attempts" in text
+    err = capsys.readouterr().err
+    assert "!!! The projector was left changed" in err
+    assert f"--ip 127.0.0.1 --port {sim.port} set HDR OFF" in err
+
+
+def test_restore_that_succeeds_on_retry_is_only_a_warning(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    failures = iter([True])
+    _patch_set_setting(
+        monkeypatch,
+        lambda n, v: (n, v) == ("HDR", "OFF") and next(failures, False),
+        _raise(SDCPTimeoutError("no answer")),
+    )
+    state = _on_state()
+    report = tmp_path / "report.md"
+    with ProjectorSimulator(state=state) as sim:
+        assert hardware_check.main(_write_args(sim, report)) == 0
+    assert state.get("HDR") == 0
+    text = report.read_text()
+    assert "back to OFF, but only on attempt 2" in text
+    assert "Set these back by hand" not in text
+
+
+def test_slow_projector_is_not_mistaken_for_a_failed_restore(tmp_path: Path) -> None:
+    state = _on_state(apply_seconds=0.15)
+    before = dict(state.settings)
+    report = tmp_path / "report.md"
+    with ProjectorSimulator(state=state) as sim:
+        args = [a if a != "0" else "0.25" for a in _write_args(sim, report)]  # --settle 0 -> 0.25
+        code = hardware_check.main(args)
+    text = report.read_text()
+    assert code == 0, text
+    assert "❌" not in text
+    time.sleep(0.2)
+    state.apply_due()
+    assert state.settings == before
+
+
+def test_ctrl_c_after_a_change_still_restores_and_reports(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_set_setting(monkeypatch, lambda n, v: (n, v) == ("HDR", "ON"), _raise(KeyboardInterrupt()), apply_first=True)
+    state = _on_state()
+    report = tmp_path / "report.md"
+    with ProjectorSimulator(state=state) as sim:
+        code = hardware_check.main(_write_args(sim, report))
+    assert code == 130
+    assert state.get("HDR") == 0
+    text = report.read_text()
+    assert "stopped with Ctrl+C during the write stage" in text
+    assert "Set these back by hand" not in text
+
+
+def test_ctrl_c_during_a_restore_lists_the_setting(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_set_setting(monkeypatch, lambda n, v: (n, v) == ("HDR", "OFF"), _raise(KeyboardInterrupt()))
+    state = _on_state()
+    report = tmp_path / "report.md"
+    with ProjectorSimulator(state=state) as sim:
+        code = hardware_check.main(_write_args(sim, report))
+    assert code == 130
+    assert state.get("HDR") == 1
+    text = report.read_text()
+    assert "- set HDR back to OFF:" in text
+    assert "MOTIONFLOW" not in text.split("| | Stage |")[0]
+
+
+def test_failing_remote_key_leaves_a_note_to_close_the_menu(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    original = Projector.send_ir_command
+
+    def fail_on_cursor(self: Projector, name: str) -> bool:
+        if name == "CURSOR_DOWN":
+            raise RuntimeError("boom")
+        return original(self, name)
+
+    monkeypatch.setattr(Projector, "send_ir_command", fail_on_cursor)
+    report = tmp_path / "report.md"
+    with ProjectorSimulator(state=_on_state()) as sim:
+        code = hardware_check.main(_args(sim, report, "--skip-discovery", "--ir", "--yes"))
+    assert code == 1
+    text = report.read_text()
+    assert "| ir | CURSOR_DOWN | RuntimeError: boom |" in text
+    assert "close the on-screen menu" in text
+    assert " ir MENU`" in text
+
+
+def test_crash_still_writes_a_report_with_traceback(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    original = Projector.get_power_status
+    calls = iter(range(100))
+
+    def crash_on_second_call(self: Projector) -> str | int:
+        # The first call is the read stage's; the second is the write stage's check, outside any wrapper.
+        if next(calls) == 1:
+            raise RuntimeError("boom")
+        return original(self)
+
+    monkeypatch.setattr(Projector, "get_power_status", crash_on_second_call)
+    report = tmp_path / "report.md"
+    with ProjectorSimulator(state=_on_state()) as sim:
+        code = hardware_check.main(_write_args(sim, report))
+    assert code == 1
+    text = report.read_text()
+    assert "| write | run | crashed: RuntimeError: boom |" in text
+    assert "Traceback" in text
+
+
+def test_ctrl_c_during_power_cycle_says_how_to_get_back(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    original = Projector.set_power
+    calls = iter(range(100))
+
+    def interrupt_second_call(self: Projector, on: bool = True) -> bool:
+        if next(calls) == 1:
+            raise KeyboardInterrupt
+        return original(self, on)
+
+    monkeypatch.setattr(Projector, "set_power", interrupt_second_call)
+    state = _on_state(warm_up_seconds=0.2, cool_down_seconds=0.3)
+    report = tmp_path / "report.md"
+    with ProjectorSimulator(state=state) as sim:
+        code = hardware_check.main(_args(sim, report, "--skip-discovery", "--power", "--yes"))
+    assert code == 130
+    text = report.read_text()
+    assert "- turn the projector on again:" in text
+    assert " power on`" in text
+    assert "- power: POWER_ON → off (accepted)" in text

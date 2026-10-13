@@ -141,3 +141,11 @@ def test_power_timing_warm_up_and_cool_down(projector: Projector, state: Simulat
     assert projector.get_power() is False
     time.sleep(0.25)
     assert projector.get_power_status() == "STANDBY"
+
+
+def test_apply_delay_keeps_the_old_value_for_a_while(projector: Projector, state: SimulatorState) -> None:
+    state.apply_seconds = 0.2
+    projector.set_setting("HDR", "AUTO")
+    assert projector.get_setting("HDR") == "OFF"
+    time.sleep(0.25)
+    assert projector.get_setting("HDR") == "AUTO"

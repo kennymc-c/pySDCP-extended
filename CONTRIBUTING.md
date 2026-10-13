@@ -152,29 +152,62 @@ timeouts, start it with `--port` on a port where a firewall drops packets, or us
 
 ### Against a real projector
 
-Make sure IP control is enabled on the projector (**Setup** > **Network Setting**) and note the
-PJ Talk community, which is `SONY` unless you changed it.
+`scripts/hardware_check.py` runs a projector through every part of the library and writes a
+Markdown report that can be pasted into a pull request or an issue. It works in stages, from
+harmless to intrusive, and only the read-only stages run unless you ask for more:
+
+| Option | What it does |
+|---|---|
+| (always) | listens for the SDAP advertisement, reads the power status, every helper getter and every setting in `protocol.SETTINGS`, and checks the error types for a wrong community and a closed port |
+| `--write` | changes each setting, reads it back and restores the original value; needs the projector on with a picture |
+| `--include-lens` | with `--write`, also changes `PICTURE_POSITION`, which moves the lens |
+| `--ir` | opens, moves through and closes the on-screen menu with simulated remote keys |
+| `--power` | switches the projector off and on again (or on and off), logging every power state with timestamps, and tries to power on while it cools down |
+| `--soak SECONDS` | polls from two threads at once to find connection limits |
+| `--redact` | hides the IP address and serial number in the report |
+
+It asks before writes and power changes unless `--yes` is given, puts every setting back even
+when a step fails, and exits with status 1 if anything failed.
+
+Before using it on hardware, dry-run it against the simulator to see what the report looks like:
 
 ```shell
-poetry run python -m pysdcp_extended discover --timeout 35        # waits one full SDAP interval
-poetry run python -m pysdcp_extended --ip 10.1.2.3 info
-poetry run python -m pysdcp_extended --ip 10.1.2.3 status
-poetry run python -m pysdcp_extended --ip 10.1.2.3 get CALIBRATION_PRESET
-poetry run python -m pysdcp_extended --ip 10.1.2.3 --community THEATER status
+poetry run python -m pysdcp_extended.simulator --host 127.0.0.1 --on --warm-up 5 --cool-down 5 \
+    --sdap-target 127.0.0.1 --sdap-interval 2 --model VPL-VW295ES
+poetry run python scripts/hardware_check.py --ip 127.0.0.1 --discovery-timeout 5 --write --ir --power --soak 10
 ```
 
-Things worth checking on hardware, because the simulator can only mirror the protocol manual:
+On the projector:
 
-- Every setting your model supports round-trips through `get`/`set` and the projector's menu
-  shows the change. Settings the model does not support should produce
-  `SDCPCommandError: ... Not Applicable Item` (or `Invalid Item`), not a hang.
-- `status` while the projector is warming up and cooling down: `power` should move through
-  `START_UP`, `START_UP_LAMP`, `POWER_ON`, `COOLING`, `COOLING2`, `STANDBY`.
-- Pulling the network cable or powering the projector off at the mains should give a clear
-  `SDCPConnectionError` / `SDCPTimeoutError` within the TCP timeout (2 seconds by default).
+1. Enable network control on the projector and note the PJ Talk community, which is `SONY`
+   unless you changed it. To switch the projector on over the network from standby, its
+   standby network setting must be enabled as well (on many models, **Remote Start**).
+2. Turn the projector on and wait for a picture. Most settings can only be read and changed
+   while it is on.
+3. Run the stages, read-only first:
 
-If a command behaves differently from what the manual says, please open an issue with the
-model name and the output of `python -m pysdcp_extended --ip ... status`.
+   ```shell
+   poetry run python scripts/hardware_check.py --ip 10.1.2.3
+   poetry run python scripts/hardware_check.py --ip 10.1.2.3 --skip-discovery --write --ir
+   poetry run python scripts/hardware_check.py --ip 10.1.2.3 --skip-discovery --power
+   poetry run python scripts/hardware_check.py --ip 10.1.2.3 --skip-discovery --soak 600 --redact
+   ```
+
+How to read the report:
+
+- ❌ **FAIL** is a bug: an unexpected exception type, a call that took longer than the timeout,
+  an IR key that waited for a reply, or a setting that could not be restored (the report says
+  which value to set back by hand).
+- ⚠️ **WARN** needs a look: a value the library's tables do not know (the raw number is shown,
+  so it can be added to `protocol.py`), a write the projector accepted but did not apply, or
+  errors under concurrent polling.
+- ℹ️ **INFO** is expected model-specific behaviour, for example a setting the model does not
+  have ("Not Applicable Item") or one that only applies with a matching signal (3D, HDR).
+- Discovery needs the computer and the projector on the same network segment, because SDAP is
+  a broadcast.
+
+If something behaves differently from the protocol manual, please open an issue with the
+report, ideally made with `--redact`.
 
 ## Pull requests
 

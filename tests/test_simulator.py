@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+
 import pytest
 
 from pysdcp_extended import (
@@ -123,3 +125,19 @@ def test_simulator_honours_custom_community(state: SimulatorState) -> None:
     state.community = "ROOM"
     with ProjectorSimulator("127.0.0.1", 0, state) as sim:
         assert Projector(ip=sim.host, tcp_port=sim.port, community="ROOM", tcp_timeout=FAST_TIMEOUT).get_power() is False
+
+
+def test_power_timing_warm_up_and_cool_down(projector: Projector, state: SimulatorState) -> None:
+    state.warm_up_seconds = 0.2
+    state.cool_down_seconds = 0.2
+    projector.set_power(True)
+    assert projector.get_power_status() == "START_UP"
+    time.sleep(0.25)
+    assert projector.get_power_status() == "POWER_ON"
+    projector.set_power(True)
+    assert projector.get_power_status() == "POWER_ON"
+    projector.set_power(False)
+    assert projector.get_power_status() == "COOLING"
+    assert projector.get_power() is False
+    time.sleep(0.25)
+    assert projector.get_power_status() == "STANDBY"

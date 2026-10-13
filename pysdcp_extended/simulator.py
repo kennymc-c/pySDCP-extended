@@ -101,6 +101,22 @@ class SimulatorState:
     hold_seconds: float = 0.0
     """Delay before answering, to exercise client timeouts."""
 
+    # Power timing, to behave like a lamp that warms up and cools down
+    warm_up_seconds: float | None = None
+    """Seconds from power on until START_UP becomes POWER_ON. None: stays in START_UP."""
+    cool_down_seconds: float | None = None
+    """Seconds spent in COOLING after power off before STANDBY. None or 0: straight to STANDBY."""
+    power_changed_at: float = field(default=0.0, repr=False)
+
+    def current_power(self) -> int:
+        """Return the power status, advancing warm-up and cool-down by the clock."""
+        elapsed = time.monotonic() - self.power_changed_at
+        if self.power == POWER_STATUS["START_UP"] and self.warm_up_seconds is not None and elapsed >= self.warm_up_seconds:
+            self.power = POWER_STATUS["POWER_ON"]
+        elif self.power == POWER_STATUS["COOLING"] and self.cool_down_seconds is not None and elapsed >= self.cool_down_seconds:
+            self.power = POWER_STATUS["STANDBY"]
+        return self.power
+
     def get(self, name: str) -> int:
         """Return the stored value of a setting from ``protocol.SETTINGS`` by name."""
         return self.settings[COMMANDS[name]]
@@ -122,7 +138,7 @@ def build_sdap_packet(state: SimulatorState) -> bytes:
         + state.community.encode("ascii")[:4].ljust(4, b"\x00")
         + state.product_name.encode("ascii")[:12].ljust(12, b"\x00")
         + struct.pack(">I", state.serial_number)
-        + struct.pack(">H", state.power)
+        + struct.pack(">H", state.current_power())
         + state.location.encode("ascii")[:24].ljust(24, b"\x00")
     )
 
@@ -181,7 +197,7 @@ def handle_request(state: SimulatorState, request: bytes) -> bytes | None:
 
 def _handle_get(state: SimulatorState, command: int) -> bytes:
     if command == COMMANDS["GET_STATUS_POWER"]:
-        return build_response(state.community, True, command, state.power)
+        return build_response(state.community, True, command, state.current_power())
     if command == COMMANDS["GET_STATUS_LAMP_TIMER"]:
         return build_response(state.community, True, command, state.lamp_hours)
     if command == COMMANDS["GET_STATUS_ERROR"]:
@@ -195,10 +211,15 @@ def _handle_set(state: SimulatorState, command: int, data: int | None) -> bytes:
     if data is None:
         return build_response(state.community, False, command, ERROR_INVALID_LENGTH)
     if command == COMMANDS["SET_POWER"]:
+        current = state.current_power()
         if data == POWER_STATUS["START_UP"]:
-            state.power = POWER_STATUS["START_UP"]
+            if current not in (POWER_STATUS["START_UP"], POWER_STATUS["START_UP_LAMP"], POWER_STATUS["POWER_ON"]):
+                state.power = POWER_STATUS["START_UP"]
+                state.power_changed_at = time.monotonic()
         elif data == POWER_STATUS["STANDBY"]:
-            state.power = POWER_STATUS["STANDBY"]
+            if current != POWER_STATUS["STANDBY"]:
+                state.power = POWER_STATUS["COOLING"] if state.cool_down_seconds else POWER_STATUS["STANDBY"]
+                state.power_changed_at = time.monotonic()
         else:
             return build_response(state.community, False, command, ERROR_INVALID_DATA)
         return build_response(state.community, True, command, None)
@@ -330,6 +351,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--sdap-interval", type=float, default=SDAP_INTERVAL, help="seconds between SDAP packets (default: 30)")
     parser.add_argument("--no-sdap", action="store_true", help="do not send SDAP advertisements")
     parser.add_argument("--on", action="store_true", help="start powered on instead of in standby")
+    parser.add_argument(
+        "--warm-up", type=float, default=None, help="seconds from power on to POWER_ON (default: stay in START_UP)"
+    )
+    parser.add_argument("--cool-down", type=float, default=None, help="seconds of COOLING after power off (default: none)")
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
@@ -339,6 +364,8 @@ def main(argv: list[str] | None = None) -> int:
         serial_number=args.serial,
         lamp_hours=args.lamp_hours,
         power=POWER_STATUS["POWER_ON"] if args.on else POWER_STATUS["STANDBY"],
+        warm_up_seconds=args.warm_up,
+        cool_down_seconds=args.cool_down,
     )
     with ProjectorSimulator(args.host, args.port, state) as sim:
         _LOGGER.info("SDCP simulator listening on %s:%s (community %s)", sim.host, sim.port, state.community)

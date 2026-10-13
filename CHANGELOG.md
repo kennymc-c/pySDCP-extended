@@ -19,6 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Type hints throughout and a `py.typed` marker
 - A projector simulator (`python -m pysdcp_extended.simulator`) and a command line client (`python -m pysdcp_extended`)
 - Test suite (pytest), ruff and mypy configuration, and a GitHub Actions workflow running them on Python 3.11 to 3.14
+- `scripts/hardware_check.py` to exercise a real projector stage by stage and write a Markdown report
+- VPL-VW295ES in the list of supported projectors
 
 ### Changed
 

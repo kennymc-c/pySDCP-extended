@@ -44,6 +44,7 @@ Supported Sony projectors should include:
 * VPL-VW260
 * VPL-VW270
 * VPL-VW285
+* VPL-VW295ES
 * VPL-VW315
 * VPL-VW320
 * VPL-VW328

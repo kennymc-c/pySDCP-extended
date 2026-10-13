@@ -158,7 +158,8 @@ harmless to intrusive, and only the read-only stages run unless you ask for more
 
 | Option | What it does |
 |---|---|
-| (always) | listens for the SDAP advertisement, reads the power status, every helper getter and every setting in `protocol.SETTINGS`, and checks the error types for a wrong community and a closed port |
+| (always) | listens for SDAP advertisements, reads the power status, every helper getter and every setting in `protocol.SETTINGS`, and checks the error types for a wrong community and a closed port |
+| no `--ip` | finds the projector and its community from the advertisement, and also tests `Projector()` created without an IP; with several projectors it asks which one to test |
 | `--write` | changes each setting, reads it back and restores the original value; needs the projector on with a picture |
 | `--include-lens` | with `--write`, also changes `PICTURE_POSITION`, which moves the lens |
 | `--ir` | opens, moves through and closes the on-screen menu with simulated remote keys |
@@ -184,10 +185,11 @@ On the projector:
    standby network setting must be enabled as well (on many models, **Remote Start**).
 2. Turn the projector on and wait for a picture. Most settings can only be read and changed
    while it is on.
-3. Run the stages, read-only first:
+3. Run the stages, read-only first. The first run finds the projector on its own and prints its
+   IP address; use that address for the later runs so they skip the wait for an advertisement:
 
    ```shell
-   poetry run python scripts/hardware_check.py --ip 10.1.2.3
+   poetry run python scripts/hardware_check.py
    poetry run python scripts/hardware_check.py --ip 10.1.2.3 --skip-discovery --write --ir
    poetry run python scripts/hardware_check.py --ip 10.1.2.3 --skip-discovery --power
    poetry run python scripts/hardware_check.py --ip 10.1.2.3 --skip-discovery --soak 600 --redact
@@ -203,8 +205,10 @@ How to read the report:
   errors under concurrent polling.
 - ℹ️ **INFO** is expected model-specific behaviour, for example a setting the model does not
   have ("Not Applicable Item") or one that only applies with a matching signal (3D, HDR).
-- Discovery needs the computer and the projector on the same network segment, because SDAP is
-  a broadcast.
+- If discovery hears nothing, the report lists the usual causes: a different network segment
+  or VLAN (SDAP is a broadcast), a firewall blocking UDP 53862, Docker or WSL2 without host
+  networking, or advertising switched off on the projector. `python -m pysdcp_extended discover
+  --timeout 35` is a quick way to retry discovery on its own.
 
 If something behaves differently from the protocol manual, please open an issue with the
 report, ideally made with `--redact`.

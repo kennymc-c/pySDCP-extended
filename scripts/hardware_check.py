@@ -2,7 +2,7 @@
 
 Runs in stages, from harmless to intrusive. Only the read-only stages run by default:
 
-1. discovery   listen for the projector's SDAP advertisement (skip with --skip-discovery)
+1. discovery   listen for SDAP advertisements, and find the projector when --ip is not given
 2. read        power status, every helper getter, every setting in protocol.SETTINGS, raw error status
 3. faults      wrong community and a closed port, to check the error types and timings
 4. write       (--write) change each setting, read it back, restore the original value
@@ -14,8 +14,12 @@ Writes and power changes ask before they run unless --yes is given. Every settin
 changed is put back, also when a step fails. The report is printed and written to a file;
 use --redact before posting it anywhere public.
 
+Without --ip, the projector is found via SDAP (and the library's own discovery for a
+Projector() created without an IP is tested as well).
+
 Examples::
 
+    poetry run python scripts/hardware_check.py
     poetry run python scripts/hardware_check.py --ip 10.0.0.5
     poetry run python scripts/hardware_check.py --ip 10.0.0.5 --write --ir
     poetry run python scripts/hardware_check.py --ip 10.0.0.5 --write --ir --power --soak 600 --redact
@@ -27,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import ipaddress
 import platform
 import statistics
 import sys
@@ -43,6 +48,7 @@ from pysdcp_extended import (
     DEFAULT_TCP_PORT,
     DEFAULT_TCP_TIMEOUT,
     DEFAULT_UDP_PORT,
+    DiscoveredProjector,
     Projector,
     SDCPCommandError,
     SDCPConnectionError,
@@ -127,38 +133,105 @@ def slow(args: argparse.Namespace, ms: float) -> bool:
     return ms > (float(args.timeout) + 1.0) * 1000
 
 
+DISCOVERY_TIPS = [
+    "The computer and the projector must be on the same network segment: SDAP is a UDP broadcast and does not "
+    "cross routers, separate VLANs, or Wi-Fi client isolation.",
+    "The computer's firewall must let Python receive UDP on port 53862 (macOS and Windows may ask the first time).",
+    "Docker containers and WSL2 only see the broadcast with host networking.",
+    "The projector advertises every 30 seconds; listen for at least 31 (--discovery-timeout).",
+    "Some models can switch the advertisement off in their network settings.",
+]
+
+
 def stage_discovery(args: argparse.Namespace, report: Report) -> None:
+    """Listen for SDAP; when no --ip was given, pick the projector to test from what was heard."""
     if args.skip_discovery:
         report.add("discovery", "SDAP", SKIP, "--skip-discovery given")
         return
     print(f"Listening for SDAP advertisements for {args.discovery_timeout:.0f} s ...", file=sys.stderr, flush=True)
-    found, err, ms = timed(lambda: discover_projectors(timeout=args.discovery_timeout, udp_port=args.udp_port))
+    found, err, ms = timed(partial(discover_projectors, timeout=args.discovery_timeout, udp_port=args.udp_port))
     if err is not None:
-        status = WARN if isinstance(err, SDCPConnectionError) else FAIL
+        status = WARN if isinstance(err, SDCPConnectionError) and args.ip else FAIL
         report.add("discovery", "SDAP", status, describe(err), ms)
+        if args.ip is None:
+            raise SystemExit(finish(args, report))
         return
     if not found:
-        report.add(
-            "discovery",
-            "SDAP",
-            WARN,
-            "nothing heard; SDAP is a broadcast and does not cross routers, and some models need advertising enabled",
-            ms,
-        )
+        report.add("discovery", "SDAP", FAIL if args.ip is None else WARN, "no advertisement heard", ms)
+        report.notes.extend(DISCOVERY_TIPS)
+        if args.ip is None:
+            report.notes.append("No --ip was given and none was discovered, so nothing else was tried.")
+            raise SystemExit(finish(args, report))
         return
+
+    # Sorted so the numbers in the choice prompt do not depend on which announcement arrived first.
+    found = sorted(found, key=lambda item: (ipaddress.ip_address(item.ip), item.serial_number))
     for item in found:
-        matches = " (this projector)" if item.ip == args.ip else ""
         report.add(
             "discovery",
-            f"advertisement from {item.ip}{matches}",
+            f"advertisement from {item.ip}",
             PASS,
             f"model {item.product_name!r}, serial {item.serial_number}, power state {item.power_state}, "
             f"community {item.header.community!r}, location {item.info.location!r}",
+            ms,
         )
-        if item.ip == args.ip:
-            report.model, report.serial = item.product_name, item.serial_number
-    if args.ip not in {item.ip for item in found}:
-        report.add("discovery", "SDAP", WARN, f"{args.ip} was not among the projectors heard")
+
+    if args.ip is None:
+        chosen = choose_projector(args, found)
+        if chosen is None:
+            report.add("discovery", "projector to test", FAIL, f"{len(found)} projectors heard; pass --ip to pick one")
+            raise SystemExit(finish(args, report))
+        args.ip = chosen.ip
+        report.add("discovery", "projector to test", PASS, f"using {chosen.ip}, found via SDAP")
+    else:
+        chosen = next((item for item in found if item.ip == args.ip), None)
+        if chosen is None:
+            report.add("discovery", "SDAP", WARN, f"{args.ip} was not among the projectors heard")
+            return
+
+    report.model, report.serial = chosen.product_name, chosen.serial_number
+    advertised = chosen.header.community
+    if args.community is None:
+        args.community = advertised or "SONY"
+        report.add("discovery", "community", PASS, f"using {args.community!r} from the advertisement")
+    elif advertised and advertised != args.community:
+        report.add("discovery", "community", WARN, f"projector advertises {advertised!r} but --community is {args.community!r}")
+
+    if args.discovered:
+        stage_auto_discovery(args, report, chosen)
+
+
+def choose_projector(args: argparse.Namespace, found: list[DiscoveredProjector]) -> DiscoveredProjector | None:
+    if len(found) == 1:
+        return found[0]
+    if args.yes:
+        return None
+    for number, item in enumerate(found, start=1):
+        print(f"  {number}. {item.ip}  {item.product_name}  serial {item.serial_number}", file=sys.stderr)
+    try:
+        answer = input(f"Which projector should be tested? [1-{len(found)}] ")
+    except EOFError:
+        return None
+    if answer.strip().isdigit() and 1 <= int(answer) <= len(found):
+        return found[int(answer) - 1]
+    return None
+
+
+def stage_auto_discovery(args: argparse.Namespace, report: Report, chosen: DiscoveredProjector) -> None:
+    """Check the library's own path for a Projector created without an IP."""
+    print("Testing Projector() without an IP; waits for the next advertisement ...", file=sys.stderr, flush=True)
+    projector = Projector(
+        udp_port=args.udp_port, tcp_port=args.port, tcp_timeout=args.timeout, udp_timeout=args.discovery_timeout
+    )
+    status, err, ms = timed(projector.get_power_status)
+    if err is not None:
+        report.add("discovery", "Projector() with no IP", FAIL, describe(err), ms)
+    elif projector.ip != chosen.ip:
+        report.add(
+            "discovery", "Projector() with no IP", INFO, f"found {projector.ip} first (another projector); power {status}", ms
+        )
+    else:
+        report.add("discovery", "Projector() with no IP", PASS, f"found {projector.ip} by itself and read power {status}", ms)
 
 
 def stage_read(args: argparse.Namespace, report: Report, projector: Projector) -> dict[str, Any]:
@@ -424,7 +497,8 @@ def render(args: argparse.Namespace, report: Report) -> str:
         f"## Hardware check: {report.model or 'unknown model'}",
         "",
         f"- Date: {datetime.datetime.now().isoformat(timespec='seconds')}",
-        f"- Projector: {args.ip}:{args.port}, community {args.community!r}, serial {report.serial}",
+        f"- Projector: {args.ip or 'not found'}:{args.port}, community {args.community!r}, serial {report.serial}",
+        f"- IP address: {'found via SDAP' if args.discovered else 'given with --ip'}",
         f"- Client: Python {platform.python_version()} on {platform.system()} {platform.release()}",
         f"- Options: {' '.join(sys.argv[1:])}",
         "",
@@ -443,7 +517,7 @@ def render(args: argparse.Namespace, report: Report) -> str:
     counts = Counter(r.status for r in report.results)
     lines += ["", "Summary: " + ", ".join(f"{counts[s]} {s}" for s in (PASS, WARN, FAIL, INFO, SKIP)), ""]
     text = "\n".join(lines)
-    if args.redact:
+    if args.redact and args.ip:
         text = text.replace(args.ip, "<projector-ip>")
         if report.serial is not None:
             text = text.replace(str(report.serial), "<serial>")
@@ -451,6 +525,8 @@ def render(args: argparse.Namespace, report: Report) -> str:
 
 
 def finish(args: argparse.Namespace, report: Report) -> int:
+    if args.community is None:
+        args.community = "SONY"
     text = render(args, report)
     print(text)
     model = (report.model or "projector").replace(" ", "_")
@@ -462,8 +538,8 @@ def finish(args: argparse.Namespace, report: Report) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--ip", required=True, help="projector IP address")
-    parser.add_argument("--community", default="SONY", help="PJ Talk community (default: SONY)")
+    parser.add_argument("--ip", help="projector IP address (default: find it via SDAP)")
+    parser.add_argument("--community", help="PJ Talk community (default: the advertised one, else SONY)")
     parser.add_argument("--port", type=int, default=DEFAULT_TCP_PORT, help=f"SDCP TCP port (default: {DEFAULT_TCP_PORT})")
     parser.add_argument("--udp-port", type=int, default=DEFAULT_UDP_PORT, help=f"SDAP UDP port (default: {DEFAULT_UDP_PORT})")
     parser.add_argument("--timeout", type=float, default=DEFAULT_TCP_TIMEOUT, help="TCP timeout in seconds (default: 2)")
@@ -485,10 +561,16 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.ip is None and args.skip_discovery:
+        parser.error("--skip-discovery needs --ip")
+    args.discovered = args.ip is None
     report = Report()
-    projector = make_projector(args)
     stage_discovery(args, report)
+    if args.community is None:
+        args.community = "SONY"
+    projector = make_projector(args)
     values = stage_read(args, report, projector)
     stage_faults(args, report)
     stage_write(args, report, projector, values)

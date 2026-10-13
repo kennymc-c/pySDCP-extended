@@ -87,7 +87,7 @@ def test_discovery_and_redaction(tmp_path: Path, free_udp_port: int) -> None:
         code = hardware_check.main(_args(sim, report, "--udp-port", str(free_udp_port), "--discovery-timeout", "0.5", "--redact"))
     text = report.read_text()
     assert code == 0, text
-    assert "(this projector)" in text
+    assert "advertisement from <projector-ip>" in text
     assert "VPL-VW520" in text
     assert "7654321" not in text
     assert "127.0.0.1" not in text
@@ -110,3 +110,94 @@ def test_unsupported_setting_is_info_not_failure(tmp_path: Path) -> None:
     text = report.read_text()
     assert code == 0, text
     assert "setting HDR | not available now: Item Error: Not Applicable Item" in text
+
+
+def _discovery_args(sim: ProjectorSimulator, udp_port: int, report: Path, *extra: str) -> list[str]:
+    return [
+        "--port",
+        str(sim.port),
+        "--udp-port",
+        str(udp_port),
+        "--discovery-timeout",
+        "0.5",
+        "--timeout",
+        "0.5",
+        "--output",
+        str(report),
+        *extra,
+    ]
+
+
+def test_finds_the_ip_and_community_without_being_told(tmp_path: Path, free_udp_port: int) -> None:
+    # A non-default community proves the advertised one was used: "SONY" would be rejected.
+    state = SimulatorState(power=POWER_STATUS["POWER_ON"], community="ROOM", product_name="VPL-VW295ES")
+    report = tmp_path / "report.md"
+    with (
+        ProjectorSimulator(state=state) as sim,
+        SDAPBroadcaster(state, ("127.0.0.1", free_udp_port), interval=0.1),
+    ):
+        code = hardware_check.main(_discovery_args(sim, free_udp_port, report))
+    text = report.read_text()
+    assert code == 0, text
+    assert "using 127.0.0.1, found via SDAP" in text
+    assert "using 'ROOM' from the advertisement" in text
+    assert "found 127.0.0.1 by itself and read power POWER_ON" in text
+    assert "IP address: found via SDAP" in text
+    assert "## Hardware check: VPL-VW295ES" in text
+
+
+def test_warns_when_given_community_differs_from_advertised(tmp_path: Path, free_udp_port: int) -> None:
+    state = SimulatorState(power=POWER_STATUS["POWER_ON"], community="ROOM")
+    report = tmp_path / "report.md"
+    with (
+        ProjectorSimulator(state=state) as sim,
+        SDAPBroadcaster(state, ("127.0.0.1", free_udp_port), interval=0.1),
+        pytest.raises(SystemExit),
+    ):
+        hardware_check.main(_discovery_args(sim, free_udp_port, report, "--ip", "127.0.0.1", "--community", "SONY"))
+    assert "projector advertises 'ROOM' but --community is 'SONY'" in report.read_text()
+
+
+def test_nothing_heard_without_ip_fails_with_tips(tmp_path: Path, free_udp_port: int) -> None:
+    report = tmp_path / "report.md"
+    with ProjectorSimulator() as sim, pytest.raises(SystemExit) as excinfo:
+        hardware_check.main(_discovery_args(sim, free_udp_port, report))
+    assert excinfo.value.code == 1
+    text = report.read_text()
+    assert "no advertisement heard" in text
+    assert "same network segment" in text
+    assert "none was discovered" in text
+
+
+def _two_projectors(udp_port: int) -> tuple[SimulatorState, SimulatorState, SDAPBroadcaster, SDAPBroadcaster]:
+    first = SimulatorState(power=POWER_STATUS["POWER_ON"], serial_number=1, product_name="VPL-VW285")
+    second = SimulatorState(power=POWER_STATUS["POWER_ON"], serial_number=2, product_name="VPL-VW295ES")
+    target = ("127.0.0.1", udp_port)
+    return first, second, SDAPBroadcaster(first, target, interval=0.1), SDAPBroadcaster(second, target, interval=0.1)
+
+
+def test_several_projectors_with_yes_asks_for_ip(tmp_path: Path, free_udp_port: int) -> None:
+    first, _, one, two = _two_projectors(free_udp_port)
+    report = tmp_path / "report.md"
+    with ProjectorSimulator(state=first) as sim, one, two, pytest.raises(SystemExit) as excinfo:
+        hardware_check.main(_discovery_args(sim, free_udp_port, report, "--yes"))
+    assert excinfo.value.code == 1
+    assert "2 projectors heard; pass --ip to pick one" in report.read_text()
+
+
+def test_several_projectors_prompts_for_a_choice(tmp_path: Path, free_udp_port: int, monkeypatch: pytest.MonkeyPatch) -> None:
+    _, second, one, two = _two_projectors(free_udp_port)
+    monkeypatch.setattr("builtins.input", lambda _prompt: "2")
+    report = tmp_path / "report.md"
+    with ProjectorSimulator(state=second) as sim, one, two:
+        code = hardware_check.main(_discovery_args(sim, free_udp_port, report))
+    text = report.read_text()
+    assert code == 0, text
+    assert "## Hardware check: VPL-VW295ES" in text
+    assert "serial 2" in text
+
+
+def test_skip_discovery_needs_an_ip() -> None:
+    with pytest.raises(SystemExit) as excinfo:
+        hardware_check.main(["--skip-discovery"])
+    assert excinfo.value.code == 2

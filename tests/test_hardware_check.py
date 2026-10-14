@@ -272,7 +272,7 @@ def test_changes_are_announced_and_logged(tmp_path: Path, capsys: pytest.Capture
     assert ">>> Changing HDR from OFF to ON" in err
     assert "<<< Restoring HDR from ON to OFF" in err
     text = report.read_text()
-    assert "- HDR: OFF → ON (applied)" in text
+    assert "- HDR: OFF → ON (applied, put back to OFF)" in text
     assert "Set these back by hand" not in text
     assert "!!!" not in err
 
@@ -295,6 +295,7 @@ def test_restore_that_keeps_failing_is_listed_for_manual_fixing(
     assert "`poetry run python -m pysdcp_extended --ip <projector-ip> --port" in text
     assert "set HDR OFF`" in text
     assert "could not put back OFF after 3 attempts" in text
+    assert "- HDR: OFF → ON (applied, NOT put back)" in text
     err = capsys.readouterr().err
     assert "!!! The projector was left changed" in err
     assert f"--ip 127.0.0.1 --port {sim.port} set HDR OFF" in err

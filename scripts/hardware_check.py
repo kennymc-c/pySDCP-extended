@@ -644,7 +644,11 @@ def render(args: argparse.Namespace, report: Report) -> str:
     if report.changes:
         lines += ["", "Changes made, in order:", ""]
         for change in report.changes:
-            lines.append(f"- {change.what}: {change.old} → {change.new} ({change.outcome})")
+            outcome = change.outcome
+            if change.what in SETTINGS and not outcome.startswith("refused"):
+                back = "NOT put back" if change.what in report.pending else f"put back to {change.old}"
+                outcome = f"{outcome}, {back}"
+            lines.append(f"- {change.what}: {change.old} → {change.new} ({outcome})")
     if report.power_log:
         lines += ["", "Power state timeline:", ""]
         lines += [f"- {seconds:6.1f} s: {state}" for seconds, state in report.power_log]
